@@ -1,0 +1,15 @@
+{
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+  "python.analysis.typeCheckingMode": "basic",
+  "pylint.enabled": false,
+  "black-formatter.enabled": false,
+  "python.linting.pylintEnabled": false,
+  "python.formatting.provider": "none"
+}

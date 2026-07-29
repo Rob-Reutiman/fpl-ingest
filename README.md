@@ -2,25 +2,32 @@
 
 Fantasy Premier League companion tooling.
 
-## Setup
+## Quick start
+
+Requires Python 3.10+ and [uv](https://github.com/astral-sh/uv).
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env   # then fill in MY_MANAGER_ID
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+cp .env.example .env         # fill in MY_MANAGER_ID
+pre-commit install
 ```
 
-## Test
+## Daily
 
 ```bash
+# Run unit tests
 pytest
+
+# Run integration tests (live API smoke tests)
+pytest -m integration
+
+# lint, fix, format
+ruff check --fix . && ruff format .
+
+# type check
+pyright
 ```
 
-## Layout
-
-```
-src/fpl/
-  config.py       # Settings from env / .env (pydantic-settings)
-  models.py       # Shared dataclasses: Player, Pick, Transfer
-  constants.py    # API base URL, league IDs, cohort strategy
-```
+Ruff + Pyright + pytest run automatically on commit via pre-commit. Or run all manually with `pre-commit run --all-files`.

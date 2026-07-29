@@ -9,7 +9,7 @@ def test_config_loads():
 
 
 def test_models_import():
-    from fpl.models import Player, Pick, Transfer
+    from fpl.models import Pick, Player, Transfer
 
     assert Player is not None
     assert Pick is not None

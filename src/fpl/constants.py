@@ -14,10 +14,10 @@ ENTRIES_PER_PAGE = 50
 # "current_season"  -> scrape league 314 current standings, then sample a pool
 #                      of that size before drawing the cohort sample.
 COHORT_STRATEGY = {
-    "template":   {"source": "template",       "pool_size": 0},        # Pre-season + GW1
-    "gw_2_4":     {"source": "current_season",  "pool_size": 100_000},
-    "gw_5_9":     {"source": "current_season",  "pool_size": 50_000},
-    "gw_10_plus": {"source": "current_season",  "pool_size": 25_000},
+    "template": {"source": "template", "pool_size": 0},  # Pre-season + GW1
+    "gw_2_4": {"source": "current_season", "pool_size": 100_000},
+    "gw_5_9": {"source": "current_season", "pool_size": 50_000},
+    "gw_10_plus": {"source": "current_season", "pool_size": 25_000},
 }
 
 # Position codes used throughout the FPL API.
