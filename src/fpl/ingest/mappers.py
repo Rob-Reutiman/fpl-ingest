@@ -3,8 +3,8 @@
 ``Storage`` accepts *schema-keyed* dicts and deliberately does no translation —
 that job lives here. Everything in this module is synchronous and side-effect
 free: no HTTP client, no database. That boundary is what lets the mapping tests
-run on plain dicts with no mocks, and it gives the picks/transfers harvest a
-place to put its own mappers later.
+run on plain dicts with no mocks, and it is where the picks/transfers harvest
+keeps its mappers.
 
 Keys named ``gameweek`` are omitted from the row dicts wherever the
 corresponding ``Storage`` method already stamps the gameweek itself.
@@ -19,6 +19,8 @@ from typing import Any
 __all__ = [
     "StandingsEntry",
     "detect_current_gw",
+    "map_cohort_picks",
+    "map_cohort_transfers",
     "map_fixtures",
     "map_my_picks",
     "map_player_gw_stats",
@@ -222,6 +224,59 @@ def map_my_picks(picks: list[dict]) -> list[dict]:
             "is_captain": bool(pick["is_captain"]),
         }
         for pick in picks
+    ]
+
+
+def map_cohort_picks(response: dict, manager_id: int, gameweek: int) -> list[dict]:
+    """Map a full picks response onto ``cohort_pick`` rows.
+
+    Unlike :func:`map_my_picks` this keeps the squad slot and vice-captaincy,
+    and tags every row with ``active_chip`` from the response root — the chip
+    applies to the whole squad, but denormalising it onto each row saves the
+    query layer a join. ``gameweek`` and ``manager_id`` are stamped here
+    because ``Storage.insert_picks`` writes rows verbatim.
+    """
+    active_chip = response.get("active_chip")
+    return [
+        {
+            "gameweek": gameweek,
+            "manager_id": manager_id,
+            "fpl_id": pick["element"],
+            "squad_position": pick["position"],
+            "multiplier": pick["multiplier"],
+            "is_captain": bool(pick["is_captain"]),
+            "is_vice_captain": bool(pick["is_vice_captain"]),
+            "active_chip": active_chip,
+        }
+        for pick in response.get("picks", [])
+    ]
+
+
+# ---------------------------------------------------------------------------
+# entry/{id}/transfers/
+# ---------------------------------------------------------------------------
+
+
+def map_cohort_transfers(response: list[dict], target_gw: int | None = None) -> list[dict]:
+    """Map a transfers response onto ``cohort_transfer`` rows.
+
+    The endpoint returns every transfer this season; ``target_gw`` filters on
+    the transfer's ``event`` (the gameweek it takes effect) so a harvest can
+    store just the week it's responsible for. The manager is already present
+    in each transfer as ``entry``, so no stamping argument is needed.
+    """
+    return [
+        {
+            "manager_id": row["entry"],
+            "gameweek": row["event"],
+            "fpl_id_in": row["element_in"],
+            "fpl_id_out": row["element_out"],
+            "cost_in": row["element_in_cost"],
+            "cost_out": row["element_out_cost"],
+            "transfer_time": _as_timestamp(row["time"]),
+        }
+        for row in response
+        if target_gw is None or row["event"] == target_gw
     ]
 
 

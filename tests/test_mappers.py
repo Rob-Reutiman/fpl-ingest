@@ -7,6 +7,8 @@ from datetime import datetime
 from fpl.ingest.mappers import (
     StandingsEntry,
     detect_current_gw,
+    map_cohort_picks,
+    map_cohort_transfers,
     map_fixtures,
     map_my_picks,
     map_player_gw_stats,
@@ -245,3 +247,99 @@ def test_standings_has_next_defaults_false():
     """Absent key must stop the crawl, not run it to the full page count."""
     assert standings_has_next({"standings": {}}) is False
     assert standings_has_next({}) is False
+
+
+# ---------------------------------------------------------------------------
+# Cohort picks / transfers (harvest)
+# ---------------------------------------------------------------------------
+
+RAW_PICKS_RESPONSE = {
+    "active_chip": None,
+    "entry_history": {"points": 61, "rank": 12345},  # Present in real API; unused.
+    "picks": [
+        {
+            "element": 100 + i,
+            "position": i,
+            "multiplier": 2 if i == 1 else (1 if i <= 11 else 0),
+            "is_captain": i == 1,
+            "is_vice_captain": i == 2,
+        }
+        for i in range(1, 16)
+    ],
+}
+
+RAW_TRANSFERS_RESPONSE = [
+    {
+        "element_in": 328,
+        "element_in_cost": 130,
+        "element_out": 401,
+        "element_out_cost": 75,
+        "entry": 555_001,
+        "event": event,
+        "time": "2025-09-12T10:30:00Z",
+    }
+    for event in (3, 5, 5, 7)
+]
+
+
+def test_map_cohort_picks_matches_schema():
+    """15 rows out, columns exactly matching cohort_pick."""
+    rows = map_cohort_picks(RAW_PICKS_RESPONSE, manager_id=555_001, gameweek=5)
+    assert len(rows) == 15
+    assert set(rows[0]) == {
+        "gameweek",
+        "manager_id",
+        "fpl_id",
+        "squad_position",
+        "multiplier",
+        "is_captain",
+        "is_vice_captain",
+        "active_chip",
+    }
+    captain = rows[0]
+    assert captain == {
+        "gameweek": 5,
+        "manager_id": 555_001,
+        "fpl_id": 101,
+        "squad_position": 1,
+        "multiplier": 2,
+        "is_captain": True,
+        "is_vice_captain": False,
+        "active_chip": None,
+    }
+
+
+def test_map_cohort_picks_tags_chip_on_every_row():
+    rows = map_cohort_picks(
+        {**RAW_PICKS_RESPONSE, "active_chip": "freehit"}, manager_id=1, gameweek=5
+    )
+    assert all(row["active_chip"] == "freehit" for row in rows)
+
+
+def test_map_cohort_transfers_key_mapping():
+    (row, *_) = map_cohort_transfers(RAW_TRANSFERS_RESPONSE)
+    assert row == {
+        "manager_id": 555_001,
+        "gameweek": 3,
+        "fpl_id_in": 328,
+        "fpl_id_out": 401,
+        "cost_in": 130,
+        "cost_out": 75,
+        "transfer_time": datetime(2025, 9, 12, 10, 30),
+    }
+
+
+def test_map_cohort_transfers_time_is_naive():
+    """Same DuckDB tz trap as kickoff_time — must be naive UTC."""
+    (row, *_) = map_cohort_transfers(RAW_TRANSFERS_RESPONSE)
+    assert row["transfer_time"].tzinfo is None
+
+
+def test_map_cohort_transfers_unfiltered_keeps_all_rows():
+    assert len(map_cohort_transfers(RAW_TRANSFERS_RESPONSE)) == 4
+
+
+def test_map_cohort_transfers_filters_by_target_gw():
+    rows = map_cohort_transfers(RAW_TRANSFERS_RESPONSE, target_gw=5)
+    assert len(rows) == 2
+    assert all(row["gameweek"] == 5 for row in rows)

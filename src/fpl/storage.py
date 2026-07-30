@@ -85,7 +85,9 @@ _SCHEMA: tuple[str, ...] = (
         PRIMARY KEY (gameweek, manager_id, fpl_id)
     )
     """,
-    # Transfers: one row per transfer event.
+    # Transfers: one row per transfer event. The PK is the natural key of a
+    # transfer — it's what lets INSERT OR REPLACE make harvest re-runs
+    # idempotent instead of appending duplicates.
     """
     CREATE TABLE IF NOT EXISTS cohort_transfer (
         manager_id      INTEGER NOT NULL,
@@ -94,7 +96,8 @@ _SCHEMA: tuple[str, ...] = (
         fpl_id_out      INTEGER NOT NULL,
         cost_in         INTEGER NOT NULL,
         cost_out        INTEGER NOT NULL,
-        transfer_time   TIMESTAMP NOT NULL
+        transfer_time   TIMESTAMP NOT NULL,
+        PRIMARY KEY (manager_id, gameweek, fpl_id_in, fpl_id_out, transfer_time)
     )
     """,
     # Global player stats per gameweek from bootstrap (snapshot at time of run).

@@ -107,9 +107,18 @@ class FPLClient:
 
         return data
 
-    async def get_many(self, paths: list[str]) -> list[Any]:
-        """Concurrent GET for multiple paths, respecting the semaphore."""
-        return await asyncio.gather(*(self.get(p) for p in paths))
+    async def get_many(self, paths: list[str], *, return_exceptions: bool = False) -> list[Any]:
+        """Concurrent GET for multiple paths, respecting the semaphore.
+
+        With ``return_exceptions=True``, per-path failures come back in the
+        result list instead of aborting the whole batch — callers that need
+        per-item outcomes (the harvest module, where one deleted manager's 404
+        must not sink 99 good responses) classify them positionally.
+        """
+        return await asyncio.gather(
+            *(self.get(p) for p in paths),
+            return_exceptions=return_exceptions,
+        )
 
     async def _fetch_with_semaphore(self, url: str) -> dict:
         async with self._semaphore:
