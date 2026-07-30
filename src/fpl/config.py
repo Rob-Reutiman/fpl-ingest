@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     db_path: str = "data/fpl.duckdb"
     my_manager_id: int | None = None
 
+    # Starting year of the current season (2026 => the 2026/27 season). Feeds
+    # the cohort sampling seed, so it must be bumped each August.
+    season_year: int = 2026
+
     # HTTP client tunables
     max_concurrent_requests: int = 5
     request_delay_seconds: float = 0.2

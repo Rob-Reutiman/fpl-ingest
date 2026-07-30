@@ -83,10 +83,14 @@ class FPLClient:
             await self._client.aclose()
             self._client = None
 
-    async def get(self, path: str) -> dict:
+    async def get(self, path: str) -> Any:
         """GET {base_url}/{path}, return parsed JSON.
 
         Cacheable paths (picks, transfers) are served from disk on cache hit.
+
+        The return type is ``Any`` because the shape is endpoint-dependent —
+        most endpoints return a JSON object, but ``fixtures/`` returns an array.
+        Callers that know the shape should annotate it at the call site.
         """
         url = f"{self._base_url}/{path.lstrip('/')}"
 
@@ -103,7 +107,7 @@ class FPLClient:
 
         return data
 
-    async def get_many(self, paths: list[str]) -> list[dict]:
+    async def get_many(self, paths: list[str]) -> list[Any]:
         """Concurrent GET for multiple paths, respecting the semaphore."""
         return await asyncio.gather(*(self.get(p) for p in paths))
 
