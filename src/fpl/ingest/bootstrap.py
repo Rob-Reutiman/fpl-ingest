@@ -1,12 +1,7 @@
-"""Module 4 — bootstrap ingestion.
+"""Bootstrap ingestion.
 
 Fetches the static reference data every other module depends on: players,
 teams, fixtures, and a snapshot of per-player stats for the current gameweek.
-Run once at the top of the weekly pre-deadline workflow.
-
-This module is deliberately thin — all raw-JSON translation lives in
-:mod:`fpl.ingest.mappers`, and all persistence in :class:`fpl.storage.Storage`.
-What's left here is fetch order and orchestration.
 """
 
 from __future__ import annotations
@@ -30,12 +25,8 @@ logger = logging.getLogger(__name__)
 async def ingest_bootstrap(client: FPLClient, storage: Storage) -> int:
     """Fetch bootstrap-static and fixtures, write them to storage.
 
-    Returns the detected current gameweek. The spec sketches this as returning
-    ``None``, but callers need the gameweek to drive :func:`ingest_my_team` and
-    cohort ingestion, and ``bootstrap-static/`` is not disk-cached — re-deriving
-    it would mean a second full fetch of a large payload.
-
-    Safe to re-run: every write is an upsert keyed on a primary key.
+    Returns the detected current gameweek. Safe to re-run: every write is an
+    upsert keyed on a primary key.
     """
     data: dict = await client.get("bootstrap-static/")
 
@@ -69,11 +60,7 @@ async def ingest_my_team(
     manager_id: int,
     gw: int,
 ) -> None:
-    """Fetch my picks for ``gw`` and store them.
-
-    The picks endpoint is disk-cached by the client, so re-running a completed
-    gameweek costs no network call.
-    """
+    """Fetch my picks for ``gw`` and store them."""
     data: dict = await client.get(f"entry/{manager_id}/event/{gw}/picks/")
     picks = map_my_picks(data["picks"])
     storage.upsert_my_picks(gw, picks)

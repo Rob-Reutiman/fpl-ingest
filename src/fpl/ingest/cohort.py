@@ -1,22 +1,6 @@
-"""Module 5 — cohort discovery and sampling.
+"""Cohort discovery and sampling.
 
-Decides *which* managers to track for a gameweek. This module identifies the
-cohort; it does not fetch their picks or transfers (that's the harvest module).
-
-The pool narrows as the season progresses, because rank means progressively
-more. Early on, standings are dominated by captain luck and differential hauls,
-so a wide pool sampled purely at random is the honest read of "engaged
-managers". By GW 10 the top 25k is genuinely ability-selected and a top slice
-becomes worth taking at 100%.
-
-IMPORTANT — from GW 5 the two slices are *separate populations*, not one sample.
-The top slice is sampled at 100% and the random slice at ~5-10% of its stratum.
-Pooling them into a single ownership number represents neither population.
-Downstream analytics must compute metrics per slice and report both.
-
-Boundary caveat: the pool changes at GW 4->5 and GW 9->10, so effective-ownership
-trends spanning those weeks are not directly comparable and will show artificial
-jumps. Transfer flow is unaffected — it's computed within a single week's sample.
+Decides which managers to track for a gameweek.
 """
 
 from __future__ import annotations
@@ -32,9 +16,8 @@ from fpl.storage import Storage
 
 logger = logging.getLogger(__name__)
 
-# Standings pages fetched per get_many call. A full 100k pool is 2,000 pages;
-# issuing them as one gather gives no progress signal for several minutes and
-# holds every coroutine in flight at once.
+# Standings pages per get_many call — chunked so a large pool logs progress
+# instead of holding thousands of requests in flight at once.
 PAGE_CHUNK_SIZE = 100
 
 
@@ -55,25 +38,12 @@ def get_cohort_strategy(gw: int) -> str:
 
 
 def is_template_only(gw: int) -> bool:
-    """True if this GW uses global ownership instead of a manager cohort.
-
-    Pre-season and GW 1 there is nothing meaningful to rank, so effective
-    ownership comes from ``selected_by_percent`` in bootstrap-static instead.
-    """
+    """True if this GW uses global ownership instead of a manager cohort."""
     return get_cohort_strategy(gw) == "template"
 
 
 def cohort_seed(gw: int, season_year: int) -> int:
-    """Derive the sampling seed for a gameweek.
-
-    The seed deliberately changes every gameweek, so the random slice re-draws
-    weekly; cross-week overlap of ~5-10% by chance is fine because transfer flow
-    is computed within a single week's sample.
-
-    What fixing the seed buys is *idempotency*: re-running the same gameweek's
-    ingestion after a crash reproduces the identical sample, so a partial
-    harvest resumes cleanly instead of chasing a different set of managers.
-    """
+    """Derive the sampling seed: deterministic per ``(gw, season_year)``."""
     return gw * 10_000 + season_year
 
 
@@ -92,12 +62,8 @@ def sample_cohort(
 
     Args:
         manager_ids_with_ranks: ``(manager_id, rank)`` pairs, any order.
-        top_slice: Best-ranked managers taken at 100%. These are the sharpest
-            signal — the consensus that defines "the correct team". Pass 0 for
-            GW 2-4, where rank is still luck rather than skill.
+        top_slice: Best-ranked managers taken at 100%. Pass 0 to skip.
         random_slice: Drawn uniformly from everything below the top slice.
-            Captures breadth: emerging transfers and differential thinking that
-            hasn't reached the very top yet.
         seed: See :func:`cohort_seed`. ``None`` means non-deterministic.
 
     Returns:
@@ -129,13 +95,7 @@ async def scrape_current_standings(
 ) -> list[StandingsEntry]:
     """Paginate the overall league's standings and collect the ranked pool.
 
-    Pure fetch — persistence is :func:`ingest_cohort`'s job, because
-    ``cohort_manager.is_top_slice`` isn't known until after sampling.
-
-    Pages needed is ``max_rank // 50``: 2,000 for a 100k pool, 1,000 for 50k,
-    500 for 25k. The crawl stops early once the API reports no further pages,
-    so a league shorter than ``max_rank`` costs one chunk rather than the full
-    page count.
+    Stops early once the API reports no further pages.
     """
     pages_needed = max_rank // ENTRIES_PER_PAGE
     paths = [
@@ -200,8 +160,7 @@ async def ingest_cohort(
     if seed is None:
         seed = cohort_seed(gw, settings.season_year)
 
-    # sample_cohort works in (manager_id, rank) pairs; total_points rides along
-    # in a lookup and is rejoined afterwards to satisfy the NOT NULL column.
+    # total_points rides along in a lookup and is rejoined after sampling.
     totals = {entry.manager_id: entry.total_points for entry in entries}
     sampled = sample_cohort(
         [(entry.manager_id, entry.rank) for entry in entries],

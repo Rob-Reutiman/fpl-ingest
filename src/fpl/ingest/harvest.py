@@ -1,14 +1,7 @@
-"""Module 6 — picks and transfer harvesting.
+"""Picks and transfer harvesting. Turns the cohort roster into data: for every sampled manager, fetch their picks
+for a gameweek and their transfer history, and write both through ``Storage``.
 
-Turns the cohort roster (Module 5) into data: for every sampled manager, fetch
-their picks for a gameweek and their transfer history, and write both through
-``Storage``. Picks must be harvested *after* the GW deadline — the API returns
-404 for a gameweek whose deadline hasn't passed yet.
-
-Failure isolation is per manager: a deleted account 404s, a flaky response
-5xxes, and neither takes down the other 9,999 requests. Every outcome is
-tallied into a :class:`HarvestResult` so the caller (and the cron log) can see
-at a glance whether a run is trustworthy.
+Picks are harvested after each GW deadline.
 """
 
 from __future__ import annotations
@@ -26,9 +19,8 @@ from fpl.storage import Storage
 
 logger = logging.getLogger(__name__)
 
-# Managers fetched per get_many call. Same rationale as the standings crawl:
-# a 10k-manager gather issued at once gives no progress signal for minutes and
-# holds every coroutine in flight; chunking yields a log line per chunk.
+# Managers fetched per get_many call — chunked to log progress and cap the
+# number of requests in flight at once.
 HARVEST_CHUNK_SIZE = 100
 
 
@@ -101,9 +93,7 @@ async def harvest_picks(
 ) -> HarvestResult:
     """Fetch and store every cohort manager's picks for ``gw``.
 
-    Safe to re-run: responses are disk-cached (a picks URL embeds the GW and is
-    immutable post-deadline) and ``cohort_pick``'s primary key makes the write
-    an upsert.
+    Safe to re-run: responses are cached and writes are upserts.
     """
     started = time.monotonic()
     paths = [f"entry/{mid}/event/{gw}/picks/" for mid in manager_ids]
@@ -146,12 +136,8 @@ async def harvest_transfers(
 
     ``target_gw=None`` stores the full season history.
 
-    The transfers URL is the same all season while its response grows, so the
-    client's indefinite disk cache would otherwise serve week N-1's snapshot
-    forever. The ``h`` query param (ignored by the API) scopes the cache key to
-    a gameweek — post-deadline that GW's transfer list is frozen, so cached
-    copies stay valid and a crashed run still resumes from cache. Unfiltered
-    harvests scope the key to the calendar day instead.
+    The ``h`` query param is ignored by the API; it exists solely to scope the
+    cache key — to the gameweek when filtering, otherwise to the calendar day.
     """
     started = time.monotonic()
     bust = f"gw{target_gw}" if target_gw is not None else time.strftime("%Y%m%d")

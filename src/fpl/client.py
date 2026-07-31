@@ -87,10 +87,7 @@ class FPLClient:
         """GET {base_url}/{path}, return parsed JSON.
 
         Cacheable paths (picks, transfers) are served from disk on cache hit.
-
-        The return type is ``Any`` because the shape is endpoint-dependent —
-        most endpoints return a JSON object, but ``fixtures/`` returns an array.
-        Callers that know the shape should annotate it at the call site.
+        The return type is ``Any`` because the shape is endpoint-dependent.
         """
         url = f"{self._base_url}/{path.lstrip('/')}"
 
@@ -111,9 +108,8 @@ class FPLClient:
         """Concurrent GET for multiple paths, respecting the semaphore.
 
         With ``return_exceptions=True``, per-path failures come back in the
-        result list instead of aborting the whole batch — callers that need
-        per-item outcomes (the harvest module, where one deleted manager's 404
-        must not sink 99 good responses) classify them positionally.
+        result list instead of aborting the whole batch, so callers can classify
+        each outcome positionally.
         """
         return await asyncio.gather(
             *(self.get(p) for p in paths),

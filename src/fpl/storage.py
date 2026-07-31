@@ -1,13 +1,4 @@
-"""DuckDB storage layer for FPL Edge.
-
-The single persistence layer: every module writes through ``Storage``, and the
-query/Streamlit layers read through it. This is a pure persistence layer — write
-functions accept *schema-keyed* dicts (keys match column names). Mapping raw FPL
-API responses onto these column shapes is the ingestion layer's job, not this one.
-
-DuckDB is embedded and single-writer, so a plain ``duckdb.connect()`` is used —
-no ORM, no connection pool.
-"""
+"""DuckDB storage layer for FPL Edge."""
 
 from __future__ import annotations
 
@@ -85,9 +76,8 @@ _SCHEMA: tuple[str, ...] = (
         PRIMARY KEY (gameweek, manager_id, fpl_id)
     )
     """,
-    # Transfers: one row per transfer event. The PK is the natural key of a
-    # transfer — it's what lets INSERT OR REPLACE make harvest re-runs
-    # idempotent instead of appending duplicates.
+    # Transfers: one row per transfer event. The natural-key PK makes
+    # INSERT OR REPLACE idempotent across harvest re-runs.
     """
     CREATE TABLE IF NOT EXISTS cohort_transfer (
         manager_id      INTEGER NOT NULL,

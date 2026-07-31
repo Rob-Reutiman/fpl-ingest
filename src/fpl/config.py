@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     my_manager_id: int | None = None
 
     # Starting year of the current season (2026 => the 2026/27 season). Feeds
-    # the cohort sampling seed, so it must be bumped each August.
+    # the cohort sampling seed.
     season_year: int = 2026
 
     # HTTP client tunables
