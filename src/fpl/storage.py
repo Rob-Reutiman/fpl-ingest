@@ -208,6 +208,23 @@ class Storage:
         cur = self._conn.execute("SELECT manager_id FROM cohort_manager WHERE gameweek = ?", [gw])
         return [row[0] for row in cur.fetchall()]
 
+    def get_players(self) -> pl.DataFrame:
+        return self._conn.execute("SELECT * FROM dim_player").pl()
+
+    def get_teams(self) -> pl.DataFrame:
+        return self._conn.execute("SELECT * FROM dim_team").pl()
+
+    def get_player_gw_stats(self, gw: int) -> pl.DataFrame:
+        return self._conn.execute("SELECT * FROM fact_player_gw WHERE gameweek = ?", [gw]).pl()
+
+    def get_cohort_managers(self, gw: int) -> pl.DataFrame:
+        return self._conn.execute("SELECT * FROM cohort_manager WHERE gameweek = ?", [gw]).pl()
+
+    def get_fixtures_from_gw(self, gw: int) -> pl.DataFrame:
+        return self._conn.execute(
+            "SELECT * FROM dim_fixture WHERE gameweek >= ? ORDER BY gameweek, kickoff_time", [gw]
+        ).pl()
+
     def get_cohort_picks(self, gw: int) -> pl.DataFrame:
         return self._conn.execute("SELECT * FROM cohort_pick WHERE gameweek = ?", [gw]).pl()
 
