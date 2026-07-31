@@ -161,7 +161,7 @@ async def harvest_transfers(
     successes, skipped, failed = _classify(fetched, "transfers")
 
     rows: list[dict] = []
-    for _manager_id, payload in successes:
+    for _, payload in successes:
         rows.extend(map_cohort_transfers(payload, target_gw=target_gw))
     storage.insert_transfers(rows)
 

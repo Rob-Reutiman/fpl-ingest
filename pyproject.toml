@@ -37,7 +37,7 @@ pythonpath = ["src"]
 asyncio_mode = "strict"
 # Integration tests hit the live FPL API — excluded by default, run manually
 # with `pytest -m integration`.
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration' -rs"
 markers = [
     "integration: hits the live FPL API; run manually, never in CI",
 ]
