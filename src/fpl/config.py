@@ -1,41 +1,49 @@
-"""Application settings, loaded from environment variables / a local .env file."""
+"""Settings loaded from environment variables / `.env`."""
 
 from __future__ import annotations
 
+from functools import lru_cache
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration for FPL Edge.
+    """R2 credentials"""
 
-    Values are read from the process environment, falling back to a local
-    ``.env`` file, then to the defaults declared here.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    r2_account_id: str
+    r2_access_key_id: str
+    r2_secret_access_key: str
+    r2_bucket: str
+
+    @field_validator("r2_bucket")
+    @classmethod
+    def _reject_endpoint_url(cls, value: str) -> str:
+        """Catch the easy mix-up of pasting the S3 endpoint in as the bucket.
+
+        boto3 otherwise fails deep in request signing with a bucket-name regex,
+        which says nothing about which setting is actually wrong.
+        """
+        if "://" in value or "/" in value or "r2.cloudflarestorage.com" in value:
+            raise ValueError(
+                f"R2_BUCKET should be the bucket name, not a URL (got {value!r}). "
+                "The endpoint is derived from R2_ACCOUNT_ID."
+            )
+        return value
+
+    @property
+    def r2_endpoint_url(self) -> str:
+        return f"https://{self.r2_account_id}.r2.cloudflarestorage.com"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Load settings on first use.
+
+    Deliberately not a module-level singleton: importing any module in this
+    package must not require R2 credentials to be present, or the test suite
+    can't run without them.
     """
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    # Core
-    fpl_base_url: str = "https://fantasy.premierleague.com/api"
-    db_path: str = "data/fpl.duckdb"
-    my_manager_id: int | None = None
-
-    # Starting year of the current season (2026 => the 2026/27 season). Feeds
-    # the cohort sampling seed.
-    season_year: int = 2026
-
-    # HTTP client tunables
-    max_concurrent_requests: int = 5
-    request_delay_seconds: float = 0.2
-    retry_attempts: int = 3
-
-    # Cohort sampling
-    cohort_sample_size: int = 10_000
-    cohort_top_slice: int = 5_000
-    cohort_random_slice: int = 5_000
-
-
-settings = Settings()
+    return Settings()  # pyright: ignore[reportCallIssue]  # values come from env

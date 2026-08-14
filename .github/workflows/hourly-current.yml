@@ -1,0 +1,25 @@
+name: hourly-current
+
+# Job 1 — refresh the live snapshot and the season's dimension tables.
+#
+# Hourly at :05 rather than on the hour: Actions is congested at :00 and a
+# delayed start would drift the whole schedule.
+
+on:
+  schedule:
+    - cron: "5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Log the R2 writes instead of performing them
+        type: boolean
+        default: false
+
+jobs:
+  run:
+    uses: ./.github/workflows/_ingest.yml
+    secrets: inherit
+    with:
+      job: hourly_current
+      dry_run: ${{ inputs.dry_run || false }}
+      timeout_minutes: 10

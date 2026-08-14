@@ -1,0 +1,44 @@
+name: ingest
+
+# Shared body of the three ingest workflows. They differ only in schedule,
+# module and timeout, so the runner setup and secret wiring live in one place.
+
+on:
+  workflow_call:
+    inputs:
+      job:
+        description: Module under fpl.jobs to run
+        required: true
+        type: string
+      dry_run:
+        description: Log the R2 writes instead of performing them
+        required: false
+        type: boolean
+        default: false
+      timeout_minutes:
+        required: false
+        type: number
+        default: 15
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv python install
+
+      - run: uv sync --locked
+
+      - name: Run fpl.jobs.${{ inputs.job }}
+        run: uv run python -m fpl.jobs.${{ inputs.job }} ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}

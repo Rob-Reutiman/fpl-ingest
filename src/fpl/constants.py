@@ -1,49 +1,30 @@
-"""Static constants shared across FPL Edge modules."""
+"""Tunables and FPL API facts shared across the ingest jobs."""
 
-# The global "Overall" league every manager is a member of.
+FPL_BASE_URL = "https://fantasy.premierleague.com/api"
+
+# The FPL API publishes no rate limit. One request per ~175ms is a courtesy
+# default that keeps a ~2,000-call manager sample under ten minutes.
+REQUEST_DELAY_SECONDS = 0.175
+REQUEST_TIMEOUT_SECONDS = 30.0
+RETRY_ATTEMPTS = 3
+
+USER_AGENT = "fpl-ingest/0.1 (+https://github.com/robreutiman/fpl-ingest)"
+
+# League 314 is the global "Overall" league every entry is a member of.
 OVERALL_LEAGUE_ID = 314
-
-# Standings pagination size returned by the FPL API.
 ENTRIES_PER_PAGE = 50
 
-# Cohort strategy thresholds.
-#
-# "template"        -> no manager cohort; use global selected_by_percent from
-#                      the bootstrap endpoint (appropriate pre-season and GW1
-#                      when standings are empty or meaningless).
-# "current_season"  -> scrape league 314 current standings, then sample a pool
-#                      of that size before drawing the cohort sample.
-COHORT_STRATEGY = {
-    "template": {"source": "template", "pool_size": 0, "top_slice": 0, "random_slice": 0},
-    "gw_2_4": {
-        "source": "current_season",
-        "pool_size": 100_000,
-        "top_slice": 0,
-        "random_slice": 10_000,
-    },
-    "gw_5_9": {
-        "source": "current_season",
-        "pool_size": 50_000,
-        "top_slice": 5_000,
-        "random_slice": 5_000,
-    },
-    "gw_10_plus": {
-        "source": "current_season",
-        "pool_size": 25_000,
-        "top_slice": 5_000,
-        "random_slice": 5_000,
-    },
-}
+# Ranks 1–1,000: every entry on pages 1–20.
+TOP_PAGE_COUNT = 20
 
-# Position codes used throughout the FPL API.
-POSITION_GK = 1
-POSITION_DEF = 2
-POSITION_MID = 3
-POSITION_FWD = 4
+# Ranks 1,001–10,000: pages 21–200. Rather than take every entry from a
+# contiguous block, sample pages across the whole range and take a subset of
+# each — same entry budget, far better spread over the rank distribution.
+SAMPLE_PAGE_START = 21
+SAMPLE_PAGE_END = 200
+SAMPLE_PAGE_COUNT = 40
+ENTRIES_PER_SAMPLED_PAGE = 25
 
-POSITION_NAMES = {
-    POSITION_GK: "GK",
-    POSITION_DEF: "DEF",
-    POSITION_MID: "MID",
-    POSITION_FWD: "FWD",
-}
+# A fixture whose kickoff is this far out (or null) is treated as postponed
+# rather than merely upcoming, when deciding if a gameweek is done.
+POSTPONED_FIXTURE_THRESHOLD_HOURS = 24

@@ -1,0 +1,27 @@
+name: gameweek-live
+
+# Job 2 — ingest and transform a settled gameweek's match facts. Exits in
+# seconds on the days nothing has settled.
+#
+# :35 puts it as far as possible from hourly-current's :05 slot. All three jobs
+# can extend the shared master tables, and Actions cron is only approximate, so
+# the schedules are spread rather than merely distinct.
+
+on:
+  schedule:
+    - cron: "35 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Log the R2 writes instead of performing them
+        type: boolean
+        default: false
+
+jobs:
+  run:
+    uses: ./.github/workflows/_ingest.yml
+    secrets: inherit
+    with:
+      job: gameweek_live
+      dry_run: ${{ inputs.dry_run || false }}
+      timeout_minutes: 20

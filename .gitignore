@@ -16,7 +16,7 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# Data — keep the directory, ignore its contents
+# Backfill scratch: cached archive CSVs and locally staged Parquet
 data/*
 !data/.gitkeep
 

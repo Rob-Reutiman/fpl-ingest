@@ -20,12 +20,12 @@ repos:
       - id: check-merge-conflict
       - id: mixed-line-ending
 
-  # Pyright type check on the source package.
+  # Pyright type check over the package and its tests.
   - repo: local
     hooks:
       - id: pyright
         name: pyright
-        entry: pyright src
+        entry: pyright
         language: system
         types: [python]
         pass_filenames: false

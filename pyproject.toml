@@ -1,16 +1,14 @@
 [project]
-name = "fpl-edge"
+name = "fpl-ingest"
 version = "0.1.0"
-description = "Fantasy Premier League companion tooling"
+description = "Scheduled raw ingest of the Fantasy Premier League public API into Cloudflare R2"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "httpx",
     "tenacity",
+    "boto3",
     "duckdb",
-    "polars",
-    "streamlit",
-    "altair",
     "pydantic-settings",
     "python-dotenv",
 ]
@@ -18,10 +16,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
-    "pytest-asyncio>=0.21",
     "ruff>=0.1",
     "pyright>=1.1.300",
     "pre-commit>=3.5",
+    "boto3-stubs[s3]",
 ]
 
 [build-system]
@@ -34,7 +32,6 @@ packages = ["src/fpl"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-asyncio_mode = "strict"
 # Integration tests hit the live FPL API — excluded by default, run manually
 # with `pytest -m integration`.
 addopts = "-m 'not integration' -rs"
@@ -43,7 +40,7 @@ markers = [
 ]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
@@ -51,8 +48,8 @@ select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501"]  # line too long (handled by formatter)
 
 [tool.pyright]
-include = ["src"]
+include = ["src", "tests"]
 typeCheckingMode = "basic"
-pythonVersion = "3.10"
+pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"

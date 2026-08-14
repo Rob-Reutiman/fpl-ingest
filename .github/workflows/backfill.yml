@@ -1,0 +1,53 @@
+name: backfill
+
+# One-shot historical load from the vaastav/Fantasy-Premier-League archive.
+#
+# Manual only — there is nothing to schedule, since past seasons don't change.
+# It doesn't reuse `_ingest.yml`: this job takes its own inputs, needs a longer
+# timeout, and reads a third-party repo rather than the FPL API.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: Comma-separated YYYY-YY seasons (always loaded oldest first)
+        required: false
+        type: string
+        default: 2023-24,2024-25,2025-26
+      rebuild_master:
+        description: Reassign every player_master_id instead of extending the existing table
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: Build and validate everything, but log the R2 writes instead of performing them
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv python install
+
+      - run: uv sync --locked
+
+      - name: Load the historical seasons
+        run: >
+          uv run python -m fpl.jobs.backfill
+          --seasons '${{ inputs.seasons }}'
+          ${{ inputs.rebuild_master && '--rebuild-master' || '' }}
+          ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}

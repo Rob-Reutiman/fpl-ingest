@@ -1,0 +1,29 @@
+name: manager-sample
+
+# Job 3 — harvest ~2,000 managers' picks for a settled gameweek. Cheap no-op
+# most days; ~10 minutes of throttled requests on the day a gameweek settles.
+
+on:
+  schedule:
+    - cron: "35 6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Log the R2 writes instead of performing them
+        type: boolean
+        default: false
+
+# A second copy hitting the FPL API alongside the first would double our
+# request rate and could duplicate a gameweek's harvest.
+concurrency:
+  group: manager-sample
+  cancel-in-progress: false
+
+jobs:
+  run:
+    uses: ./.github/workflows/_ingest.yml
+    secrets: inherit
+    with:
+      job: manager_sample
+      dry_run: ${{ inputs.dry_run || false }}
+      timeout_minutes: 60
