@@ -1,24 +1,23 @@
-"""Cross-season player identity: `(season, element_id)` -> stable `player_master_id`.
+"""Resolves a season's `element_id` to a `player_master_id` stable across seasons.
 
-FPL reassigns `element` ids every season, so without this a query spanning two
-seasons silently returns nonsense. Pure logic — no network, no bucket. Shared by
-the historical backfill and (once it grows a curated layer) the live ingest.
+FPL reassigns `element` ids every season, so a query spanning two of them needs
+a durable key to join on.
 
-The matching is tiered, and the ordering of the tiers is the whole design:
+Matching runs in tiers, and their order is the whole design.
 
-  0. `player_code` — the Premier League player code, stable across seasons.
-  1. normalized name — exact match on lowercased, de-accented "first second".
-  2. normalized name, ambiguous — disambiguated by team continuity.
-  3. no match — a *new* master id.
+  0. `player_code`, the Premier League player code, which survives a rollover.
+  1. Normalized name, matched exactly after lowercasing and stripping accents.
+  2. Normalized name matching several masters, resolved by team continuity.
+  3. Nothing matched, so a fresh master id.
 
-Tier 0 leads because FPL relists names between seasons. Across 2023-24 -> 2025-26
-that is 66 players (Rodri, Kepa, Merino, Ugarte among them) who name-matching alone
-would have split into two careers each.
+The code leads because FPL relists names between seasons. Across the 2023 to
+2026 seasons that covers 66 players, Rodri and Kepa among them, whose careers
+name matching alone would split in two.
 
-Over-splitting beats over-merging: a spurious new master id is visible in the review
-file and fixable, while a wrong merge silently fuses two players' careers and is very
-hard to notice later. So every decision that isn't a tier-0 code match is recorded in
-`player_match_review.csv` whether or not the job accepted it.
+Splitting one career in two beats fusing two careers into one. A spurious id
+shows up in the review file and is fixable, whereas a wrong merge is silent.
+Every decision resting on a name reaches `player_match_review.csv` with its
+outcome, leaving the file to hold the cases a human can act on.
 """
 
 from __future__ import annotations
@@ -32,10 +31,10 @@ _WHITESPACE = re.compile(r"\s+")
 
 
 def normalize_name_key(first_name: str, second_name: str) -> str:
-    """Lowercase, strip diacritics, collapse whitespace: `"first second"`.
+    """Return `"first second"`, lowercased, deaccented and whitespace collapsed.
 
-    NFKD splits an accented character into base + combining mark, so dropping the
-    combining marks turns "Håland" into "haland" without a transliteration table.
+    NFKD splits an accented character into a base and a combining mark, so
+    dropping the marks turns "Håland" into "haland" with no lookup table.
     """
     combined = unicodedata.normalize("NFKD", f"{first_name} {second_name}")
     stripped = "".join(ch for ch in combined if not unicodedata.combining(ch))
@@ -69,8 +68,8 @@ class MasterPlayer:
     normalized_name_key: str
     first_seen_season: str
     last_seen_season: str
-    # Not persisted — used by tier 2 to disambiguate on club continuity.
     seasons: dict[str, str] = field(default_factory=dict)
+    """Maps season to team_master_id. Held in memory for tier 2."""
 
     def as_row(self) -> dict[str, object]:
         return {
@@ -87,7 +86,7 @@ class MasterPlayer:
 
 @dataclass(frozen=True)
 class ReviewRow:
-    """A line of `player_match_review.csv`. `resolution` is blank for a human."""
+    """One line of `player_match_review.csv`. `resolution` awaits a human."""
 
     season: str
     element_id: int
@@ -114,7 +113,6 @@ REVIEW_COLUMNS = (
     "resolution",
 )
 
-CODE_MATCH = "code_exact"
 NAME_MATCH = "name_exact"
 TEAM_CONTINUITY = "name_ambiguous_team_continuity"
 NAME_CONFLICT = "name_match_rejected_different_code"
@@ -124,8 +122,8 @@ UNRESOLVED = "unresolved_new_master_id"
 class MasterRegistry:
     """Accumulates `dim_player_master` and `map_player_season` across seasons.
 
-    Seasons must be resolved oldest first, so ids accrete chronologically and
-    `first_seen_season` means what it says.
+    Resolve seasons oldest first. Ids then accrete chronologically and
+    `first_seen_season` holds the season it names.
     """
 
     def __init__(self, existing: Iterable[MasterPlayer] = ()) -> None:
@@ -145,9 +143,10 @@ class MasterRegistry:
         return sorted(self._masters.values(), key=lambda m: m.player_master_id)
 
     def resolve_season(self, players: Sequence[SeasonPlayer]) -> dict[int, int]:
-        """Resolve one season. Returns `{element_id: player_master_id}`.
+        """Resolve one season's squads. Returns `element_id` to master id.
 
-        Iterates in `element_id` order so a re-run allocates new ids identically.
+        Iterates in `element_id` order, so a rerun allocates ids identically.
+        One master id may be claimed by one player per season.
         """
         assigned: dict[int, int] = {}
         claimed: set[int] = set()
@@ -161,7 +160,7 @@ class MasterRegistry:
         if player.player_code is not None:
             match = self._by_code.get(player.player_code)
             if match is not None:
-                self._touch(match, player)
+                self._merge_season(match, player)
                 return match
 
         candidates = [
@@ -170,9 +169,8 @@ class MasterRegistry:
             if master_id not in claimed
         ]
 
-        # Two players sharing a name but holding different stable codes are two
-        # different people, whatever the name says. Rejecting the match here is
-        # what stops tier 1 from over-merging namesakes.
+        # Two players sharing a name while holding different codes are two
+        # different people, whatever the name says.
         if player.player_code is not None:
             conflicting = [
                 master_id
@@ -187,7 +185,7 @@ class MasterRegistry:
         if len(candidates) == 1:
             match = candidates[0]
             self._record(player, [match], NAME_MATCH, "high")
-            self._touch(match, player)
+            self._merge_season(match, player)
             return match
 
         if len(candidates) > 1:
@@ -199,17 +197,15 @@ class MasterRegistry:
             if len(narrowed) == 1:
                 match = narrowed[0]
                 self._record(player, candidates, TEAM_CONTINUITY, "medium")
-                self._touch(match, player)
+                self._merge_season(match, player)
                 return match
-            # Still ambiguous. A new id is wrong but visible; a guess is invisible.
+            # A fresh id is wrong and visible. A guess would be wrong and silent.
             self._record(player, candidates, UNRESOLVED, "low")
             return self._create(player)
 
-        # No candidates at all. With a stable code in hand that just means a player
-        # the master table hasn't seen before — a debutant or a new signing, not an
-        # unresolved match. Sending all ~1,400 of those to the review file would
-        # bury the handful of cases a human can actually act on. Without a code
-        # there's nothing authoritative to stand on, so it is worth recording.
+        # No candidates. Holding a code, this player is simply new to the master
+        # table, and the code is authority enough to say so. Lacking one, the
+        # decision rests on nothing and goes to the review file.
         if player.player_code is None:
             self._record(player, [], UNRESOLVED, "none")
         return self._create(player)
@@ -235,11 +231,11 @@ class MasterRegistry:
         self.new_ids_by_season[player.season] = self.new_ids_by_season.get(player.season, 0) + 1
         return master_id
 
-    def _touch(self, master_id: int, player: SeasonPlayer) -> None:
-        """Fold a later season's view into the master row.
+    def _merge_season(self, master_id: int, player: SeasonPlayer) -> None:
+        """Fold one season's view of a player into their master row.
 
-        Canonical names track the most recent season, so `canonical_web_name` is
-        the name the player is currently known by rather than their debut name.
+        Canonical names track the most recent season, holding the name the
+        player goes by today.
         """
         master = self._masters[master_id]
         master.seasons[player.season] = player.team_master_id

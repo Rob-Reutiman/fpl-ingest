@@ -1,13 +1,11 @@
-"""Job 3 — capture the squads of ~2,000 high-ranked managers for a gameweek.
+"""Capture the squads of some 2,000 highly ranked managers for one gameweek.
 
-Triggered on gameweek settlement rather than on the upcoming deadline, for two
-reasons: picks for GW N are 404 until N's deadline passes, and the league 314
-standings only describe the GW N cohort once N's points have settled. Waiting
-for `data_checked` gets both from the same moment, filed under the same GW.
+Runs on settlement. Picks for a gameweek return 404 until its deadline passes,
+and the overall league standings describe that gameweek's cohort once its points
+settle, so waiting draws the cohort and their squads from one moment in time.
 
-Every response is accumulated in memory and written in four PutObject calls, so
-a ~2,000-entry harvest costs a handful of R2 write operations rather than
-thousands.
+Responses accumulate in memory and reach `raw/` in four writes, holding a 2,000
+entry harvest to a handful of PutObject calls.
 """
 
 from __future__ import annotations
@@ -59,8 +57,8 @@ def collect_cohort(
 ) -> tuple[list[CohortEntry], list[dict[str, Any]], list[dict[str, Any]], list[int]]:
     """Build the manager cohort from the overall league standings.
 
-    Returns the cohort plus the raw pages behind it, so the standings can be
-    stored as fetched.
+    Returns the cohort, the raw pages behind it for storage as fetched, and the
+    page numbers the random draw landed on.
     """
     top_pages = [json.loads(client.standings_page(p)) for p in range(1, TOP_PAGE_COUNT + 1)]
     cohort = [e for page in top_pages for e in _to_cohort(_results(page), TOP_GROUP)]
@@ -84,8 +82,8 @@ def harvest_picks(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Fetch every manager's picks. Returns ``(records, failures)``.
 
-    One bad entry must not cost the whole run, but it must not vanish either —
-    anything that fails after the client's retries is recorded by id.
+    An entry still failing after its retries is recorded by id and the harvest
+    continues, so one bad entry costs one squad.
     """
     records: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
@@ -139,12 +137,10 @@ def _summary(
 
 
 def run(client: FPLClient, store: ObjectStore, now: datetime | None = None) -> int | None:
-    """Harvest the cohort for the earliest settled, not-yet-stored gameweek."""
+    """Harvest the cohort for the earliest settled gameweek absent from the bucket."""
     bootstrap = json.loads(client.bootstrap_static())
     season = derive_season(bootstrap)
 
-    # The summary is written last, so its presence means a run completed. Keying
-    # idempotency off it means a run killed mid-harvest is retried, not skipped.
     target = resolve_target(
         bootstrap["events"],
         already_ingested=lambda gw: store.exists(keys.manager_summary_key(season, gw)),
@@ -169,9 +165,8 @@ def run(client: FPLClient, store: ObjectStore, now: datetime | None = None) -> i
         TOP_PAGE_COUNT + len(sampled_pages),
     )
 
-    # Fail before writing anything rather than lay down an empty summary, which
-    # would mark this gameweek done forever. League 314 reads empty until the
-    # first gameweek settles, so this is reachable if the settle check regresses.
+    # An empty summary would mark this gameweek done for good. The standings
+    # read empty until the first gameweek of a season settles, so fail early.
     if not cohort:
         raise RuntimeError(f"GW{gw}: overall league standings returned no entries")
 
@@ -184,8 +179,8 @@ def run(client: FPLClient, store: ObjectStore, now: datetime | None = None) -> i
 
     transform(store, season, target, bootstrap, records, metadata)
 
-    # Written last: its presence is the idempotency marker, so a run that dies
-    # part-way through is retried rather than skipped.
+    # Written last, and the key `already_ingested` above checks. Its presence
+    # marks a finished run, leaving a broken one to be retried.
     store.put_json(
         keys.manager_summary_key(season, gw),
         _summary(season, target, cohort, records, failures, sampled_page_numbers),
@@ -202,7 +197,7 @@ def transform(
     records: list[dict[str, Any]],
     metadata: dict[str, str],
 ) -> None:
-    """Picks NDJSON -> `fact_manager_pick` and `agg_player_ownership`."""
+    """Turn harvested picks into `fact_manager_pick` and `agg_player_ownership`."""
     rows = ownership.pick_rows(records)
     sizes = ownership.sample_sizes(records)
     logger.info(
@@ -214,13 +209,13 @@ def transform(
     with TemporaryDirectory(prefix="fpl-picks-") as tmp:
         scratch = Path(tmp)
         with master.MasterTables(store, scratch) as masters:
-            resolution = masters.resolve(season, bootstrap)
+            assigned = masters.resolve(season, bootstrap)
             if masters.changed:
                 masters.write(store)
 
             con = parquet.connect()
             try:
-                master.register_player_map(con, season, resolution.players)
+                master.register_player_map(con, season, assigned)
                 ownership.load_picks(con, scratch, rows, sizes)
                 ownership.build_fact_manager_pick(con, season, target.gw)
                 ownership.build_agg_player_ownership(con, season, target.gw)

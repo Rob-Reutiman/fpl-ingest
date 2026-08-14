@@ -1,4 +1,4 @@
-"""Settings loaded from environment variables / `.env`."""
+"""Settings loaded from the environment or a local `.env` file."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """R2 credentials"""
+    """R2 credentials."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -21,10 +21,10 @@ class Settings(BaseSettings):
     @field_validator("r2_bucket")
     @classmethod
     def _reject_endpoint_url(cls, value: str) -> str:
-        """Catch the easy mix-up of pasting the S3 endpoint in as the bucket.
+        """Reject an S3 endpoint pasted in as the bucket name.
 
-        boto3 otherwise fails deep in request signing with a bucket-name regex,
-        which says nothing about which setting is actually wrong.
+        boto3 fails on this much later, during request signing, against a regex
+        that names neither the setting nor the fix.
         """
         if "://" in value or "/" in value or "r2.cloudflarestorage.com" in value:
             raise ValueError(
@@ -40,10 +40,9 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Load settings on first use.
+    """Load settings on first use, caching them thereafter.
 
-    Deliberately not a module-level singleton: importing any module in this
-    package must not require R2 credentials to be present, or the test suite
-    can't run without them.
+    Deferring the load to call time leaves this package importable without
+    credentials, so the tests run anywhere.
     """
-    return Settings()  # pyright: ignore[reportCallIssue]  # values come from env
+    return Settings()  # pyright: ignore[reportCallIssue]

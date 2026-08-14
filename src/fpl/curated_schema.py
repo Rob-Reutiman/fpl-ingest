@@ -1,20 +1,17 @@
-"""The curated Parquet column contract, transcribed from `fpl-parquet-schemas.md`.
+"""The curated Parquet column contract, transcribed from the schema document.
 
-Every writer projects through `select_list()` and every reader can assert against
-`COLUMNS`, so a column can't be invented, dropped or reordered in one table without
-this file changing. That matters because the whole point of the spec is that a
-multi-season `read_parquet` glob unions cleanly: a season missing a column, or
-carrying it as a different type, breaks the glob for every season.
+Every writer projects through `select_list()`, so this file governs the column
+set, the column order and the physical type of every table. Holding all three
+constant across seasons is what lets one `read_parquet` glob union them.
 
-Types are DuckDB type names, cast explicitly. Sources are read as VARCHAR and cast
-here rather than trusting CSV type sniffing, which drifts between seasons.
+Types are DuckDB type names, always cast explicitly.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
-# Table name -> ordered (column, duckdb_type). Order is the Parquet column order.
+# Table name to its ordered columns. This order is the Parquet column order.
 COLUMNS: Mapping[str, tuple[tuple[str, str], ...]] = {
     "dim_player_master": (
         ("player_master_id", "INTEGER"),
@@ -226,8 +223,7 @@ COLUMNS: Mapping[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
-# Tables the backfill writes per season, and the sort key that makes each file
-# deterministic so a re-run produces an identical file.
+# Written once per season, with the sort key that makes each file reproducible.
 SEASON_TABLES: Mapping[str, tuple[str, ...]] = {
     "dim_team": ("team_id",),
     "dim_player": ("element_id",),
@@ -245,7 +241,7 @@ MASTER_TABLES: Mapping[str, tuple[str, ...]] = {
     "map_team_season": ("season", "team_id"),
 }
 
-# Only the live pipeline writes these — the archive has no equivalent source.
+# Prices, injuries and manager picks, which exist for the live season alone.
 CURRENT_SEASON_TABLES: Mapping[str, tuple[str, ...]] = {
     "fpl_current": ("element_id",),
     "fact_manager_pick": ("gameweek", "entry_id", "pick_position"),
@@ -260,19 +256,18 @@ _SORT_KEYS: Mapping[str, tuple[str, ...]] = {
 
 
 def sort_key(table: str) -> tuple[str, ...]:
-    """The ordering that makes this table's file byte-reproducible."""
+    """The ordering that makes this table's file reproducible across runs."""
     return _SORT_KEYS[table]
 
 
-# `element_type` -> the denormalized `position` label the spec stores alongside it.
+# Maps `element_type` to the `position` label stored alongside it.
 POSITION_LABELS: Mapping[int, str] = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
 
-# The archive's per-row position string in `merged_gw.csv` -> `element_type`.
-# 'AM' (2024-25's assistant managers, element_type 5) is deliberately absent:
-# they are not players, the spec only defines 1-4, and FPL retired the asset.
+# Maps the archive's per row position string to an `element_type`.
 ARCHIVE_POSITIONS: Mapping[str, int] = {"GK": 1, "GKP": 1, "DEF": 2, "MID": 3, "FWD": 4}
 
-# Position strings that exist in the source but are excluded from every table.
+# Assistant managers, an asset FPL ran for one season. They fall outside the
+# schema's four playing positions and are dropped from every table.
 EXCLUDED_POSITIONS = frozenset({"AM", "MNG"})
 
 
@@ -281,17 +276,13 @@ def column_names(table: str) -> tuple[str, ...]:
 
 
 def create_table_ddl(table: str, *, name: str | None = None) -> str:
-    """DDL for an empty table with exactly this contract's columns and types."""
+    """DDL for an empty table carrying this contract's columns and types."""
     body = ", ".join(f"{column} {duck_type}" for column, duck_type in COLUMNS[table])
     return f"CREATE OR REPLACE TABLE {name or table} ({body})"
 
 
-def select_list(table: str, *, source: str = "") -> str:
-    """A projection that pins both the column set and the column order.
-
-    `source` optionally qualifies each column with a relation alias.
-    """
-    prefix = f"{source}." if source else ""
+def select_list(table: str) -> str:
+    """A projection pinning the column set, the order and the types."""
     return ",\n    ".join(
-        f"CAST({prefix}{name} AS {duck_type}) AS {name}" for name, duck_type in COLUMNS[table]
+        f"CAST({name} AS {duck_type}) AS {name}" for name, duck_type in COLUMNS[table]
     )

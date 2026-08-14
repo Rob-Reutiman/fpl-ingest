@@ -1,15 +1,11 @@
-"""Job 1 — hourly refresh of the live snapshot and the season's dimensions.
+"""Hourly refresh of the live snapshot and the season's dimension tables.
 
-Two layers, both written every run:
+Writes both layers every run. The bootstrap and fixtures bodies land verbatim
+under `raw/`, then `fpl_current` and the four dimensions under `curated/`.
 
-  raw/     the bootstrap-static and fixtures bodies, byte for byte
-  curated/ fpl_current and the four dimension tables
-
-This is the one job that always overwrites. Prices, ownership and injury news
-describe the present; there is no version of them to preserve. The dated raw
-snapshot is the exception — it is written once a day as provenance, so the
-curated layer stays rebuildable from raw even though `current/` has been
-overwritten since.
+This job overwrites unconditionally, since prices, ownership and injury news
+describe the present. Each body also lands under a key naming the day, which
+retains one snapshot per day and keeps `curated/` rebuildable from `raw/`.
 """
 
 from __future__ import annotations
@@ -57,8 +53,8 @@ def run(
     written = [
         _put(store, keys.current_bootstrap_key(season), bootstrap_body),
         _put(store, keys.current_fixtures_key(season), fixtures_body),
-        # Dated copies: `current/` is overwritten hourly, so without these an
-        # un-captured moment would be unrecoverable.
+        # Provenance. The hourly keys above are overwritten in place, so a key
+        # naming the day retains that day's last snapshot.
         _put(store, keys.bootstrap_key(season, on), bootstrap_body),
         _put(store, keys.fixtures_key(season, on), fixtures_body),
     ]
@@ -66,14 +62,14 @@ def run(
     with TemporaryDirectory(prefix="fpl-current-") as tmp:
         scratch = Path(tmp)
         with master.MasterTables(store, scratch) as masters:
-            resolution = masters.resolve(season, bootstrap)
+            assigned = masters.resolve(season, bootstrap)
             if masters.changed:
                 written += masters.write(store)
 
             con = parquet.connect()
             try:
                 current.load_snapshot(con, scratch, bootstrap, fixtures)
-                master.register_player_map(con, season, resolution.players)
+                master.register_player_map(con, season, assigned)
                 current.build_all(con, season, now)
 
                 for table in current.TABLES:

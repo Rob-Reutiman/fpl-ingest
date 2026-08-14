@@ -1,22 +1,15 @@
-"""Job 2's transforms: one settled gameweek into `fact_player_fixture`.
+"""Turns one settled gameweek into `fact_player_fixture`, a row per appearance.
 
-The three grain rules from the spec are enforced here, and they are the reason
-this module can't just dump `event/{gw}/live/`:
+The live endpoint returns every player in the game whatever their club did that
+week, so three grain rules shape the rows drawn from it.
 
-* **Blank gameweek → no row.** `event/{gw}/live/` returns *every* player in the
-  game, including those whose club had no fixture. Writing those through would
-  put a zero-minute row against a blank, and every rolling window downstream
-  would read it as a genuine non-appearance. The join to the gameweek's fixtures
-  is what drops them.
-* **Didn't feature → a row with `minutes = 0`.** Same endpoint, opposite
-  treatment: their club did play, so the row belongs.
-* **Double gameweek → two rows.** `event/{gw}/live/` aggregates a player's stats
-  across both fixtures, so a DGW player's stats are fetched per fixture from
-  `element-summary/{id}` instead. See `dgw.py`.
+A club with a fixture yields a row for each of its players, carrying `minutes`
+of 0 for anyone who stayed on the bench. A club with no fixture yields nothing,
+leaving a blank gameweek as a gap that a rolling window skips over. A club with
+two fixtures yields two rows per player, one for each, sourced from `dgw`.
 
-Team attribution is pinned at ingest time from the bootstrap snapshot taken in
-the same run. Football facts are immutable once written, so a January transfer
-can never reach back and reattribute an August fixture.
+Team attribution is pinned to the fixture as the row is built, so a January
+transfer leaves an August match attributed to the club that played it.
 """
 
 from __future__ import annotations
@@ -33,8 +26,8 @@ logger = logging.getLogger(__name__)
 EVENT_LIVE = "event_live"
 ELEMENT_SUMMARY = "element_summary"
 
-# Stat columns the contract takes straight off a live `stats` object or an
-# element-summary `history[]` entry. Both endpoints use the same field names.
+# Contract columns taken straight off a payload. A live `stats` object and an
+# element summary `history` entry share these field names.
 STAT_COLUMNS = (
     "minutes",
     "starts",
@@ -62,7 +55,7 @@ STAT_COLUMNS = (
     "ict_index",
 )
 
-# FPL sends these as decimal strings; the rest arrive as integers.
+# FPL sends these as decimal strings. The rest arrive as integers.
 _DECIMAL_STATS = frozenset(
     {
         "influence",
@@ -78,11 +71,10 @@ _DECIMAL_STATS = frozenset(
 
 
 def stat_columns(stats: dict[str, Any]) -> dict[str, Any]:
-    """Pull the contract's stat columns off a live or element-summary payload.
+    """Pull the contract's stat columns off one player's payload.
 
-    A stat the season doesn't report stays NULL. Coercing it to 0 would claim it
-    was measured and happened to be zero — the distinction the whole schema turns
-    on for `defensive_contribution`.
+    A stat the season leaves unreported stays NULL, which reads as unmeasured. A
+    0 would assert the stat was measured and came out zero.
     """
     columns: dict[str, Any] = {}
     for name in STAT_COLUMNS:
@@ -98,36 +90,33 @@ def appearance_rows(
     element_types: dict[int, int],
     values: dict[int, int],
 ) -> list[dict[str, Any]]:
-    """Flatten `event/{gw}/live/` into one row per (player, fixture).
+    """Flatten a live gameweek payload into one row per player per fixture.
 
-    Players whose club had no fixture this gameweek produce nothing — that is the
-    blank-gameweek rule, and it is enforced by construction rather than filtered
-    afterwards.
+    Covers clubs with exactly one fixture. `dgw` supplies the clubs with two,
+    whose live stats arrive as one total spanning both matches. A club with no
+    fixture falls out here, which is how a blank gameweek stays blank.
     """
-    by_team: dict[int, list[dict[str, Any]]] = {}
+    fixtures_by_team: dict[int, list[dict[str, Any]]] = {}
     for fixture in fixtures:
-        by_team.setdefault(fixture["team_h"], []).append(fixture)
-        by_team.setdefault(fixture["team_a"], []).append(fixture)
+        fixtures_by_team.setdefault(fixture["team_h"], []).append(fixture)
+        fixtures_by_team.setdefault(fixture["team_a"], []).append(fixture)
 
     rows: list[dict[str, Any]] = []
     for element in live.get("elements", []):
         element_id = int(element["id"])
         team_id = element_teams.get(element_id)
         if team_id is None:
-            # In the live payload but not in bootstrap — a player removed from the
-            # game mid-week. No club, so no fixture to attribute anything to.
+            # Live yet absent from bootstrap, so removed from the game midweek.
+            # There is no club to attribute a fixture to.
             continue
-        played = by_team.get(team_id, [])
-        if not played:
-            continue
-        if len(played) > 1:
-            # Handled from element-summary, where the stats are split per fixture.
+        team_fixtures = fixtures_by_team.get(team_id, [])
+        if len(team_fixtures) != 1:
             continue
         rows.append(
             _row(
                 element_id=element_id,
                 team_id=team_id,
-                fixture=played[0],
+                fixture=team_fixtures[0],
                 stats=element.get("stats", {}),
                 element_type=element_types.get(element_id),
                 value=values.get(element_id),
@@ -184,10 +173,9 @@ def load_rows(
 ) -> None:
     """Register the flattened rows as a view.
 
-    An empty gameweek is possible — a partial ingest where every fixture that has
-    been played belongs to a club with nothing else on. `read_json` infers no
-    columns from `[]`, so the empty case gets an explicitly-shaped view instead of
-    a binder error three statements later.
+    A partial ingest can arrive with zero rows. `read_json` infers no columns
+    from an empty array, so that case builds an explicitly shaped empty view and
+    the binder finds its columns further down.
     """
     if not rows:
         columns = ", ".join(f"NULL AS {name}" for name in ROW_COLUMNS)
@@ -211,7 +199,7 @@ def build_gameweek_facts(
     is_partial: bool,
     table: str = "gameweek_facts",
 ) -> None:
-    """Project the flattened rows onto the contract, joining team master ids."""
+    """Project the flattened rows onto the contract, joining the master ids."""
     con.execute(
         f"""
         CREATE OR REPLACE TABLE {table} AS
@@ -270,11 +258,10 @@ def merge_fact_player_fixture(
     incoming: str = "gameweek_facts",
     table: str = "fact_player_fixture",
 ) -> None:
-    """Whole-file rewrite: the season so far, with this gameweek's rows replacing
-    any earlier version of the same keys.
+    """The season so far, with the incoming gameweek replacing older rows.
 
-    Re-ingesting is how a gameweek first stored as `is_partial` gets corrected once
-    its postponed fixture is played, so the incoming rows must win.
+    Incoming rows win, which is how a gameweek stored as partial takes on its
+    postponed fixture once that has been played.
     """
     if existing is None:
         con.execute(f"CREATE OR REPLACE TABLE {table} AS SELECT * FROM {incoming}")

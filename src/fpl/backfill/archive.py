@@ -1,9 +1,7 @@
-"""Fetches season CSVs from the vaastav/Fantasy-Premier-League archive.
+"""Fetches a season's source CSVs from the community archive on GitHub.
 
-The only I/O in the backfill besides the R2 writes. Files are cached on disk so a
-re-run — or an iteration on the transform — costs nothing, and the exact bytes
-fetched are copied to `raw/{season}/archive/` so a transform bug is fixable without
-re-fetching from a third-party repo that may change or disappear.
+The only network access in the backfill. Files cache on disk, so iterating on a
+transform costs no downloads.
 """
 
 from __future__ import annotations
@@ -21,8 +19,7 @@ logger = logging.getLogger(__name__)
 REPO_BASE_URL = "https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master"
 ARCHIVE_BASE_URL = f"{REPO_BASE_URL}/data"
 
-# Source path within a season directory -> the local/R2 filename we store it under.
-# `merged_gw.csv` is nested, so it gets flattened for the provenance copy.
+# Maps a path inside a season directory to the flat filename it stores under.
 SOURCE_FILES: dict[str, str] = {
     "gws/merged_gw.csv": "merged_gw.csv",
     "players_raw.csv": "players_raw.csv",
@@ -32,8 +29,8 @@ SOURCE_FILES: dict[str, str] = {
     "DATA_DICTIONARY.md": "DATA_DICTIONARY.md",
 }
 
-# The data dictionary is one file at the repo root covering every season. It's
-# copied into each season's provenance prefix anyway, so each is self-contained.
+# Files living at the repo root and describing every season at once. Each is
+# copied under every season, leaving each prefix self contained.
 REPO_ROOT_FILES = frozenset({"DATA_DICTIONARY.md"})
 
 
@@ -61,11 +58,11 @@ def fetch_season(
     client: httpx.Client | None = None,
     refresh: bool = False,
 ) -> SeasonSources:
-    """Download (or reuse cached) source files for one season."""
+    """Return one season's source files, downloading whatever the cache lacks."""
     season_dir = cache_dir / season
     season_dir.mkdir(parents=True, exist_ok=True)
 
-    owned = client is None
+    owns_client = client is None
     http = client or httpx.Client(
         headers={"User-Agent": USER_AGENT},
         timeout=REQUEST_TIMEOUT_SECONDS,
@@ -86,5 +83,5 @@ def fetch_season(
             paths[filename] = destination
         return SeasonSources(season=season, paths=paths)
     finally:
-        if owned:
+        if owns_client:
             http.close()

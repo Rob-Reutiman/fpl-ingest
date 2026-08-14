@@ -1,10 +1,9 @@
-"""Job 3's transforms: manager picks and the ownership aggregate.
+"""Manager picks, and the ownership percentages aggregated from them.
 
-`agg_player_ownership` answers the question the whole warehouse is for — "who do
-the best managers own that I don't" — so its denominator has to be right.
-`sample_size` is the number of managers whose picks were **actually fetched** in
-that group, not the number the sampler aimed for. Using the target would let a
-handful of failed requests quietly deflate every percentage in the group.
+`agg_player_ownership` answers the question the warehouse exists for, which is
+who the best managers own that the field does not, so its denominator has to be
+right. `sample_size` counts the managers whose picks were fetched, holding every
+percentage in the group true to the sample that produced it.
 """
 
 from __future__ import annotations
@@ -18,14 +17,13 @@ import duckdb
 
 logger = logging.getLogger(__name__)
 
-# A squad is 15: positions 1-11 start, 12-15 are the bench. Autosubs can give a
-# benched player a multiplier later, so "starting" means the position, not the
-# multiplier.
+# A squad holds 15 players. Positions 1 through 11 start and the rest sit. This
+# reads the pick position, which autosubs leave alone once the matches begin.
 STARTING_POSITIONS = 11
 
 
 def pick_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Flatten the harvested NDJSON into one row per (manager, pick)."""
+    """Flatten the harvested picks into one row per manager per pick."""
     rows: list[dict[str, Any]] = []
     for record in records:
         entry_id = int(record["entry_id"])
@@ -46,7 +44,7 @@ def pick_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def sample_sizes(records: list[dict[str, Any]]) -> dict[str, int]:
-    """Managers successfully fetched per group — the ownership denominator."""
+    """Count the managers fetched per group. The ownership denominator."""
     sizes: dict[str, set[int]] = {}
     for record in records:
         sizes.setdefault(record["group"], set()).add(int(record["entry_id"]))
@@ -106,7 +104,7 @@ def build_agg_player_ownership(
     picks: str = "fact_manager_pick",
     table: str = "agg_player_ownership",
 ) -> None:
-    """Ownership per (element, sample_group), against the real denominator."""
+    """Ownership per player per group, over the managers actually fetched."""
     con.execute(
         f"""
         CREATE OR REPLACE TABLE {table} AS
@@ -142,10 +140,10 @@ def merge_by_gameweek(
     existing: str | None,
     gameweek: int,
 ) -> None:
-    """Append this gameweek to the season's file, replacing any earlier version.
+    """Add this gameweek to the season's rows, replacing any earlier version.
 
-    Same whole-file rewrite as the match facts: at ~30k rows a gameweek it is far
-    simpler than partitioning, and re-running a gameweek has to be safe.
+    Rewrites the whole file. At 30k rows a gameweek that stays cheaper than
+    partitioning, and it leaves a gameweek safe to run again.
     """
     if existing is None:
         return

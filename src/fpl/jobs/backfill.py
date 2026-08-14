@@ -1,11 +1,11 @@
-"""Historical backfill — load past seasons from the community archive into R2.
+"""Loads past seasons from the community archive into R2.
 
-One shot, re-runnable, `workflow_dispatch` only. Orchestration lives here; the
-fetching, transforms, checks and reporting live in `fpl.backfill.*`.
+Safe to run again. Existing master ids are read back and extended, every table
+is written in a deterministic order, and a second run reproduces the same files
+byte for byte.
 
-Nothing is uploaded until every season has been built and validated. A partial
-bucket is worse than no bucket: a consumer can't tell a half-loaded season from a
-complete one.
+The upload waits until every season has built and validated, so the bucket goes
+from empty to complete in one step.
 """
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ from fpl.transforms import parquet, team_fixture
 
 logger = logging.getLogger(__name__)
 
-# Oldest first, always: master ids accrete chronologically so `first_seen_season`
-# means what it says, and a re-run allocates the same ids in the same order.
+# Always processed oldest first, so master ids accrete chronologically and a
+# second run allocates the same ids in the same order.
 DEFAULT_SEASONS = ("2023-24", "2024-25", "2025-26")
 
 DEFAULT_CACHE_DIR = Path("data/archive")
@@ -47,10 +47,9 @@ _CONTENT_TYPES = {".parquet": PARQUET_CONTENT_TYPE, ".csv": CSV_CONTENT_TYPE}
 
 
 def load_existing_masters(store: ObjectStore) -> list[MasterPlayer]:
-    """Read `dim_player_master` back so a re-run extends rather than reassigns.
+    """Read `dim_player_master` back, so that a second run extends it.
 
-    This is what makes the job non-duplicating: existing players keep their ids and
-    only genuinely new ones get fresh ones.
+    Existing players keep the ids they hold. Fresh ids go to genuine debutants.
     """
     body = store.get_bytes(keys.master_key("dim_player_master.parquet"))
     if body is None:
@@ -85,7 +84,7 @@ def build_season(
 ) -> tuple[report.SeasonStats, dict[int, int]]:
     """Transform one season and stage its Parquet locally.
 
-    Returns its stats and its `{element_id: player_master_id}` map, which the
+    Returns the report stats and the element to master id mapping, which the
     caller accumulates into `map_player_season`.
     """
     logger.info("building %s", season)
@@ -96,7 +95,6 @@ def build_season(
 
     players = transform.read_season_players(con, season)
     new_ids_before = registry.new_ids_by_season.get(season, 0)
-    review_before = len(registry.review)
     assigned = registry.resolve_season(players)
     transform.register_master_map(con, season, assigned)
 
@@ -116,7 +114,6 @@ def build_season(
         season=season,
         players=len(players),
         new_master_ids=registry.new_ids_by_season.get(season, 0) - new_ids_before,
-        review_rows=len(registry.review) - review_before,
         manager_rows_dropped=managers,
         duplicate_rows_collapsed=duplicates,
         null_filled_columns=null_filled,
@@ -142,7 +139,7 @@ def build_master(
 
 
 def upload(store: ObjectStore, staging_dir: Path, seasons: Sequence[str]) -> list[str]:
-    """Push the staged curated files. Called only after validation passes."""
+    """Push the staged curated files. Reached once validation has passed."""
     written: list[str] = []
     for season in seasons:
         for table in curated_schema.SEASON_TABLES:
@@ -160,11 +157,10 @@ def upload(store: ObjectStore, staging_dir: Path, seasons: Sequence[str]) -> lis
 
 
 def upload_provenance(store: ObjectStore, sources: SeasonSources) -> list[str]:
-    """Copy the source files to R2 unmodified.
+    """Copy the source files to R2 verbatim.
 
-    Storage is trivial at this size and it means a transformation bug is fixable by
-    re-running the transform, without re-fetching from a third-party repo that may
-    have changed or disappeared in the meantime.
+    Storage is trivial at this size, and holding the exact bytes leaves a
+    transform bug fixable from the bucket alone.
     """
     written: list[str] = []
     for filename, path in sources.paths.items():

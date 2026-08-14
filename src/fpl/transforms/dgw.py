@@ -1,19 +1,13 @@
-"""Double gameweeks: getting per-fixture stats when a club plays twice.
+"""Recovers stats at fixture grain when a club plays twice in one gameweek.
 
-`event/{gw}/live/` reports a player's stats **aggregated over the gameweek**. Its
-`explain` array is broken out per fixture, but only carries point-scoring
-identifiers — and xG/xA don't score points, so the per-fixture xG split isn't
-recoverable from that endpoint. `element-summary/{id}`'s `history[]` *is* genuinely
-per-fixture and includes xG, so DGW players are fetched from there instead.
+`FPLClient.event_live` reports a player's stats summed over the whole gameweek.
+Its `explain` array splits by fixture but names only the events that score
+points, and xG and xA score none, so the split for those stays out of reach.
+`FPLClient.element_summary` returns a `history` at fixture grain carrying xG,
+and supplies these players instead.
 
-This costs one extra request per affected player — typically 40-60 players, a
-handful of times a season — and only for clubs with two fixtures in the gameweek.
-
-`reconcile` checks the two endpoints against each other whenever a DGW is
-processed: the per-fixture rows should sum to the gameweek aggregate. That both
-verifies the fallback is doing its job and would catch FPL changing the shape of
-either endpoint, which is otherwise the kind of thing you discover months later in
-a model that has quietly been wrong.
+The fallback costs one request per affected player, typically 40 to 60 of them,
+a handful of times a season.
 """
 
 from __future__ import annotations
@@ -26,7 +20,7 @@ from fpl.transforms.match_facts import ELEMENT_SUMMARY, stat_columns
 
 logger = logging.getLogger(__name__)
 
-# Summing these across a player's fixtures must reproduce the live aggregate.
+# Summing these across a player's fixtures reproduces the gameweek total.
 RECONCILED_STATS = ("minutes", "total_points", "goals_scored", "assists", "bps")
 
 
@@ -39,7 +33,7 @@ def teams_with_multiple_fixtures(fixtures: Iterable[dict[str, Any]]) -> set[int]
 
 
 def affected_elements(element_teams: dict[int, int], doubled_teams: set[int]) -> list[int]:
-    """Players needing the per-fixture fallback, in id order for a stable run."""
+    """Players needing the fixture grain fallback, in id order for a stable run."""
     return sorted(element_id for element_id, team in element_teams.items() if team in doubled_teams)
 
 
@@ -50,11 +44,10 @@ def history_rows(
     fixtures_by_id: dict[int, dict[str, Any]],
     element_type: int | None,
 ) -> list[dict[str, Any]]:
-    """One row per fixture from `element-summary`'s `history[]`.
+    """Build one row per fixture from an element summary `history`.
 
-    The team is derived from the fixture and `was_home`, exactly as the backfill
-    does it — so it is pinned to the fixture rather than to the player's current
-    club, for free.
+    The club comes from the fixture and `was_home`, pinning it to the match as
+    played whatever the player's registration says today.
     """
     rows: list[dict[str, Any]] = []
     for entry in summary.get("history", []):
@@ -86,12 +79,12 @@ def reconcile(
     per_fixture: list[dict[str, Any]],
     live_stats: dict[str, Any],
 ) -> list[str]:
-    """Compare the summed per-fixture rows against the live aggregate.
+    """Compare the summed fixture rows against the gameweek total.
 
-    Returns a list of human-readable mismatches — empty when they agree. A
-    mismatch doesn't fail the job: `element-summary` is the more granular source
-    and is what we keep. But it means one of the two endpoints changed shape, and
-    that is worth shouting about.
+    Returns readable descriptions of any mismatch, empty when the two agree. The
+    job keeps the finer grained rows and carries on. A mismatch points at one of
+    the two endpoints changing shape, which otherwise surfaces months later
+    inside a model that has been quietly wrong.
     """
     problems: list[str] = []
     for stat in RECONCILED_STATS:

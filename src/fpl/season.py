@@ -1,25 +1,22 @@
-"""Derive the season identifier from a bootstrap-static response."""
+"""Derive the season identifier from a bootstrap response."""
 
 from __future__ import annotations
 
 import re
 from typing import Any
 
-# e.g. "https://fantasy.premierleague.com/img/static/2026_27/" -> ("2026", "27")
+# Matches the season in a static asset URL, as in ".../static/2026_27/".
 _SEASON_RE = re.compile(r"/(\d{4})_(\d{2})(?:/|$)")
 
 _STATIC_URL_PATH = ("game_config", "settings", "static_content_url")
 
 
 def derive_season(bootstrap: dict[str, Any]) -> str:
-    """Return the season string (e.g. ``"2026-27"``) for this bootstrap.
+    """Return the season identifier for this bootstrap.
 
-    Deriving rather than hardcoding is what makes season rollover a non-event:
-    the jobs simply start writing under a new prefix the day FPL flips over.
-
-    The `YYYY-YY` form is the schema contract's, and matches the archive repo's
-    directory naming — so a season ingested live and a season loaded by the
-    backfill land under identical prefixes and glob together.
+    Deriving the season makes rollover free. The jobs start writing under a new
+    prefix the day FPL flips over. The format matches the archive's directory
+    naming, so live and historical seasons glob together.
     """
     node: Any = bootstrap
     for key in _STATIC_URL_PATH:

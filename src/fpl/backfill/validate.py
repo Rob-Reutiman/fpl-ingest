@@ -1,12 +1,10 @@
 """Checks that run before anything is uploaded.
 
-The job's failure mode to avoid is not "crashes" — it's "writes plausible-looking
-data that is quietly wrong grain". These checks are the guard, so they raise rather
-than log, and they run against the built tables and then against the staged Parquet
-before a single object reaches R2.
+The failure worth guarding against is plausible data at quietly the wrong grain,
+so these raise. They run first against the built tables, then against the staged
+files, and every one passes before an object reaches R2.
 
-Warnings are for things worth a human's attention that don't mean the data is wrong
-(the archive changing its manager row count, xGC diverging from summed opponent xG).
+A warning marks something worth a human's attention that leaves the output good.
 """
 
 from __future__ import annotations
@@ -29,17 +27,16 @@ logger = logging.getLogger(__name__)
 MIN_FACT_ROWS = 25_000
 MAX_FACT_ROWS = 30_000
 
-# Seasons before this had no defcon stat at all; it must be NULL, never 0.
+# FPL introduced `defensive_contribution` in this season. Earlier ones hold NULL.
 DEFCON_FIRST_SEASON = "2025-26"
 
-# Rows the archive is known to carry for assistant managers, by season. A mismatch
-# is a warning, not a failure: it means upstream edited the archive, which is worth
-# noticing but doesn't make our output wrong.
+# Assistant manager rows the archive carries, by season. A mismatch warns,
+# since it means upstream has edited the archive.
 EXPECTED_MANAGER_ROWS = {"2024-25": 322}
 
 
 class BackfillValidationError(RuntimeError):
-    """Raised when a check fails. Nothing is uploaded."""
+    """Raised by a failing check, ending the run ahead of the upload."""
 
 
 @dataclass
@@ -52,19 +49,22 @@ class CheckResults:
         self.warnings.append(message)
 
     def note(self, name: str, value: object, *, season: str | None = None) -> None:
-        """Record a check's result. Season-scoped notes are kept per season —
-        a bare name would leave only the last season's value in the report."""
+        """Record a check's result for the report.
+
+        Pass `season` for anything measured per season, or later seasons overwrite
+        earlier ones and the report shows only the last.
+        """
         self.notes[f"{season} {name}" if season else name] = value
 
 
 def _count(con: duckdb.DuckDBPyConnection, sql: str) -> int:
-    """Run a scalar-returning count query. Absent or NULL reads as zero."""
+    """Run a count query. Absent or NULL reads as zero."""
     row = con.execute(sql).fetchone()
     return int(row[0]) if row and row[0] is not None else 0
 
 
 def validate_season(con: duckdb.DuckDBPyConnection, season: str, results: CheckResults) -> None:
-    """Per-season checks against the in-memory tables for that season."""
+    """Check one season against the tables built in memory for it."""
     failures: list[str] = []
 
     rows = _count(con, "SELECT count(*) FROM fact_player_fixture")
@@ -74,8 +74,8 @@ def validate_season(con: duckdb.DuckDBPyConnection, season: str, results: CheckR
             f"{MIN_FACT_ROWS:,}-{MAX_FACT_ROWS:,} range"
         )
 
-    # A conflicting duplicate is two different readings of one appearance. Exact
-    # duplicates were already collapsed by DISTINCT; anything left is real trouble.
+    # Duplicates identical to the byte have already collapsed. A key still held
+    # twice carries two readings of one appearance.
     conflicting = _count(
         con,
         "SELECT count(*) FROM (SELECT element_id, fixture_id FROM fact_source "
@@ -124,8 +124,8 @@ def validate_season(con: duckdb.DuckDBPyConnection, season: str, results: CheckR
     if multi_team:
         failures.append(f"{multi_team} team_ids resolve to more than one team_master_id")
 
-    # Double gameweeks must survive as two rows. If a season's source collapsed them
-    # into a gameweek-level aggregate, every rolling window downstream is wrong.
+    # Double gameweeks survive as two rows. A season whose source summed them
+    # into one would read wrong in every rolling window downstream.
     doubles = _count(
         con,
         "SELECT count(*) FROM (SELECT element_id, gameweek FROM fact_player_fixture "
@@ -138,9 +138,9 @@ def validate_season(con: duckdb.DuckDBPyConnection, season: str, results: CheckR
         )
     results.note("double gameweek player-rows", doubles, season=season)
 
-    # A blank gameweek must produce no row at all. A zero-minute row for a blank
-    # would be counted as a genuine non-appearance by every rolling window.
-    blanks = _count(
+    # A blank gameweek produces no row. A row carrying 0 minutes would read as
+    # a player who was available and went unused.
+    blank_rows = _count(
         con,
         """
         SELECT count(*) FROM fact_player_fixture p
@@ -151,8 +151,8 @@ def validate_season(con: duckdb.DuckDBPyConnection, season: str, results: CheckR
         )
         """,
     )
-    if blanks:
-        failures.append(f"{blanks} fact rows exist for a team with no fixture that gameweek")
+    if blank_rows:
+        failures.append(f"{blank_rows} fact rows exist for a team with no fixture that gameweek")
 
     orphans = _count(
         con,
@@ -175,8 +175,8 @@ def validate_season(con: duckdb.DuckDBPyConnection, season: str, results: CheckR
     if sides:
         failures.append(f"{sides} fixtures in fact_team_fixture don't have exactly two rows")
 
-    # Price/ownership is gameweek-level, so both rows of a double gameweek must agree
-    # before DISTINCT collapses them.
+    # Price and ownership sit at gameweek grain, so both rows of a double
+    # gameweek agree before DISTINCT collapses them.
     inconsistent = _count(
         con,
         "SELECT count(*) FROM (SELECT element_id, gameweek FROM fact_player_gameweek_fpl "
@@ -188,15 +188,15 @@ def validate_season(con: duckdb.DuckDBPyConnection, season: str, results: CheckR
             "across their fixture rows"
         )
 
-    defcon_nulls = _count(
+    defcon_rows = _count(
         con, "SELECT count(*) FROM fact_player_fixture WHERE defensive_contribution IS NOT NULL"
     )
-    if season < DEFCON_FIRST_SEASON and defcon_nulls:
+    if season < DEFCON_FIRST_SEASON and defcon_rows:
         failures.append(
-            f"{season} predates defensive_contribution but {defcon_nulls} rows are non-NULL; "
+            f"{season} predates defensive_contribution but {defcon_rows} rows are non-NULL; "
             "a missing stat must never be coerced to 0"
         )
-    if season >= DEFCON_FIRST_SEASON and not defcon_nulls:
+    if season >= DEFCON_FIRST_SEASON and not defcon_rows:
         failures.append(f"{season} should carry defensive_contribution but every row is NULL")
 
     _check_season_totals(con, season, failures, results)
@@ -212,14 +212,14 @@ def validate_season(con: duckdb.DuckDBPyConnection, season: str, results: CheckR
 def _check_season_totals(
     con: duckdb.DuckDBPyConnection, season: str, failures: list[str], results: CheckResults
 ) -> None:
-    """Sum a top scorer's fixtures and compare to the archive's season total.
+    """Sum a top scorer's fixtures and compare against the reported season total.
 
-    An end-to-end check that the joins didn't drop or duplicate appearances: this
-    catches a fanned-out join that every key-uniqueness check would pass.
+    Proof end to end that the joins preserved every appearance exactly once. A
+    join that fanned out passes every check on key uniqueness and fails this one.
+
+    The join runs on name, since `cleaned_players` carries no element id, and the
+    position filter runs against `players_raw`, which holds a numeric code.
     """
-    # cleaned_players.csv has no element id, so the join is on name; its own
-    # `element_type` is a label rather than the numeric code, hence the filter on
-    # players_raw instead.
     row = con.execute(
         """
         SELECT c.first_name || ' ' || c.second_name,
@@ -251,7 +251,7 @@ def _check_season_totals(
 
 
 def _check_xgc(con: duckdb.DuckDBPyConnection, season: str, results: CheckResults) -> None:
-    """Cross-check the reported xGC against the opponent's summed xG."""
+    """Compare the reported xGC against the opponent's summed xG."""
     diverging = warn_on_xgc_divergence(con, season)
     results.note("team-fixtures with divergent xGC", diverging, season=season)
     if diverging:
@@ -273,11 +273,10 @@ def _check_manager_rows(con: duckdb.DuckDBPyConnection, season: str, results: Ch
 
 
 def validate_output(staging_dir: Path, seasons: Sequence[str], results: CheckResults) -> None:
-    """Cross-season checks against the staged Parquet, not the in-memory tables.
+    """Check the staged files, across every season, once they have been written.
 
-    The union guarantee is a property of the *files*, so it has to be checked on
-    the files: a per-season table can look right and still write a column as a
-    different physical type.
+    The union guarantee is a property of the files themselves. A table can look
+    right in memory and still write a column out as a different physical type.
     """
     failures: list[str] = []
     con = duckdb.connect(":memory:")
@@ -299,7 +298,7 @@ def validate_output(staging_dir: Path, seasons: Sequence[str], results: CheckRes
                         f"      expected {expected}\n      got      {actual}"
                     )
 
-            # The point of the identical column set: a multi-season glob must union.
+            # What the identical column set buys. The glob unions.
             glob = (staging_dir / "*" / f"{table}.parquet").as_posix()
             try:
                 con.execute(f"SELECT count(*) FROM read_parquet('{glob}')").fetchone()
@@ -337,16 +336,16 @@ def _validate_master(con: duckdb.DuckDBPyConnection, staging_dir: Path) -> list[
 
     players = (master_dir / "map_player_season.parquet").as_posix()
     if (master_dir / "map_player_season.parquet").exists():
-        # (season, element_id) is the primary key; (season, player_master_id) must
-        # also be unique, or two of a season's players share one career.
-        for keys in (("season", "element_id"), ("season", "player_master_id")):
+        # (season, element_id) is the primary key. (season, player_master_id) must
+        # be unique too, or two of a season's players share one career.
+        for key_columns in (("season", "element_id"), ("season", "player_master_id")):
             dupes = _count(
                 con,
-                f"SELECT count(*) FROM (SELECT {', '.join(keys)} "
+                f"SELECT count(*) FROM (SELECT {', '.join(key_columns)} "
                 f"FROM read_parquet('{players}') GROUP BY ALL HAVING count(*) > 1)",
             )
             if dupes:
-                failures.append(f"map_player_season has {dupes} duplicate {keys} keys")
+                failures.append(f"map_player_season has {dupes} duplicate {key_columns} keys")
 
     teams = (master_dir / "map_team_season.parquet").as_posix()
     if (master_dir / "map_team_season.parquet").exists():

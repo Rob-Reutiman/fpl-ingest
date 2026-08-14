@@ -1,12 +1,10 @@
-"""Job 2 — capture and transform a gameweek's match facts once it has settled.
+"""Capture and transform a gameweek's match facts once it has settled.
 
-Most days this is a no-op: it exits as soon as it finds nothing new to do.
+Idle most days, exiting as soon as it finds nothing to do.
 
-`fact_player_fixture` is rewritten whole each time rather than partitioned. A full
-season is ~27k rows and about 2 MB, so rewriting beats managing 38 per-gameweek
-files and the small-file problem that comes with them. `fact_team_fixture` is then
-regenerated from the whole thing, which is why this job needs the season's entire
-fixture list and not just the gameweek's.
+`fact_player_fixture` is rewritten whole. A full season runs to 27k rows and 2 MB,
+which stays cheaper than maintaining 38 files. The team facts are then rebuilt
+over that entire table, so the job fetches the season's whole fixture list.
 """
 
 from __future__ import annotations
@@ -32,7 +30,7 @@ CURATED_TABLES = ("fact_player_fixture", "fact_team_fixture")
 
 
 def run(client: FPLClient, store: ObjectStore, now: datetime | None = None) -> int | None:
-    """Ingest and transform the earliest settled, not-yet-stored gameweek."""
+    """Ingest and transform the earliest settled gameweek absent from the bucket."""
     bootstrap = json.loads(client.bootstrap_static())
     season = derive_season(bootstrap)
 
@@ -72,8 +70,6 @@ def _ingest_and_transform(
     live_body = client.event_live(gw)
     live = json.loads(live_body)
 
-    # The whole season's fixtures: `fact_team_fixture` is regenerated over every
-    # gameweek loaded so far, so it needs every fixture's score, not this week's.
     all_fixtures = json.loads(client.fixtures())
     gw_fixtures = [f for f in all_fixtures if f.get("event") == gw]
 
@@ -87,8 +83,8 @@ def _ingest_and_transform(
         client, store, season, target, live, gw_fixtures, element_teams, element_types
     )
 
-    # Raw goes down only after every fetch has succeeded, so a run that dies
-    # mid-harvest leaves no key behind for the idempotency check to trip over.
+    # The idempotency key goes down once every fetch has succeeded, so its
+    # presence marks a gameweek captured whole.
     store.put_bytes(keys.gameweek_live_key(season, gw), live_body, metadata=metadata)
     store.put_json(keys.gameweek_fixtures_key(season, gw), gw_fixtures, metadata=metadata)
 
@@ -105,10 +101,10 @@ def _double_gameweek_rows(
     element_teams: dict[int, int],
     element_types: dict[int, int],
 ) -> list[dict[str, Any]]:
-    """Per-fixture rows for players whose club played twice this gameweek.
+    """Rows at fixture grain for players whose club played twice this gameweek.
 
-    `event/{gw}/live/` aggregates a double gameweek into a single set of stats, so
-    these players come from `element-summary` instead — see `transforms/dgw.py`.
+    Empty in the ordinary case. The live endpoint reports these players' stats
+    as one total spanning both matches, so each is refetched on its own.
     """
     doubled = dgw.teams_with_multiple_fixtures(fixtures)
     if not doubled:
@@ -141,8 +137,6 @@ def _double_gameweek_rows(
             fixtures_by_id,
             element_types.get(element_id),
         )
-        # Cross-check the fallback against the endpoint it replaces: the
-        # per-fixture rows should sum to the gameweek aggregate.
         if dgw.reconcile(element_id, per_fixture, live_stats.get(element_id, {})):
             mismatched += 1
         rows += per_fixture
@@ -169,7 +163,7 @@ def _transform(
     with TemporaryDirectory(prefix="fpl-gameweek-") as tmp:
         scratch = Path(tmp)
         with master.MasterTables(store, scratch) as masters:
-            resolution = masters.resolve(season, bootstrap)
+            assigned = masters.resolve(season, bootstrap)
             if masters.changed:
                 masters.write(store)
 
@@ -178,7 +172,7 @@ def _transform(
                 current.load_snapshot(con, scratch, bootstrap, fixtures)
                 current.build_dim_team(con, season)
                 current.build_dim_fixture(con, season)
-                master.register_player_map(con, season, resolution.players)
+                master.register_player_map(con, season, assigned)
 
                 match_facts.load_rows(con, scratch, rows)
                 match_facts.build_gameweek_facts(con, season, target.gw, is_partial=target.partial)

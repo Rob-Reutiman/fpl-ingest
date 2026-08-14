@@ -1,4 +1,4 @@
-"""Renders `backfill_report.md` — what the run actually loaded."""
+"""Renders `backfill_report.md`, describing what the run loaded."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ class SeasonStats:
     duplicate_rows_collapsed: int = 0
     players: int = 0
     new_master_ids: int = 0
-    review_rows: int = 0
 
 
 def _table(headers: Sequence[str], rows: Sequence[Sequence[object]]) -> str:

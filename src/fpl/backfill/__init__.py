@@ -1,5 +1,4 @@
-"""One-shot historical backfill of past seasons from the community archive.
+"""Historical backfill of past seasons from the community archive.
 
-Separate from the live ingest jobs: it runs on `workflow_dispatch`, reads a
-third-party GitHub repo rather than the FPL API, and writes curated Parquet.
+Runs by manual dispatch, reads a public GitHub repo, and writes curated Parquet.
 """

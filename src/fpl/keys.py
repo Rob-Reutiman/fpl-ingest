@@ -1,22 +1,4 @@
-"""R2 object keys.
-
-Every key in the bucket is built here so no other module concatenates a path.
-
-    raw/{season}/current/bootstrap-static.json
-    raw/{season}/current/fixtures.json
-    raw/{season}/daily/bootstrap-static/{date}.json
-    raw/{season}/daily/fixtures/{date}.json
-    raw/{season}/gw{N}/gameweek-live.json
-    raw/{season}/gw{N}/fixtures.json
-    raw/{season}/gw{N}/element-summary/{element_id}.json
-    raw/{season}/gw{N}/standings-top1000.json
-    raw/{season}/gw{N}/standings-sample.json
-    raw/{season}/gw{N}/manager-picks.ndjson
-    raw/{season}/gw{N}/manager-picks-summary.json
-    raw/{season}/archive/{filename}
-    curated/{season}/{table}.parquet
-    curated/master/{filename}
-"""
+"""Every R2 object key in the bucket, so no other module concatenates a path."""
 
 from __future__ import annotations
 
@@ -40,7 +22,7 @@ def fixtures_key(season: str, on: date) -> str:
 
 
 def current_bootstrap_key(season: str) -> str:
-    """Fixed key, overwritten hourly — the live snapshot the transform reads."""
+    """The live snapshot the transforms read. Overwritten in place every hour."""
     return f"raw/{season}/current/bootstrap-static.json"
 
 
@@ -53,7 +35,7 @@ def gameweek_fixtures_key(season: str, gw: int) -> str:
 
 
 def element_summary_key(season: str, gw: int, element_id: int) -> str:
-    """One player's per-fixture history, fetched only for double gameweeks."""
+    """One player's history at fixture grain. Stored for double gameweeks."""
     return _gameweek(season, gw, f"element-summary/{element_id}.json")
 
 
@@ -78,7 +60,7 @@ def manager_summary_key(season: str, gw: int) -> str:
 
 
 def raw_archive_key(season: str, filename: str) -> str:
-    """Provenance copy of a third-party source file, stored unmodified."""
+    """A verbatim copy of one third party source file, kept for provenance."""
     return f"raw/{season}/archive/{filename}"
 
 
@@ -87,5 +69,5 @@ def curated_key(season: str, table: str) -> str:
 
 
 def master_key(filename: str) -> str:
-    """Cross-season table or operational output. Not season-scoped."""
+    """A table or report spanning every season."""
     return f"curated/master/{filename}"

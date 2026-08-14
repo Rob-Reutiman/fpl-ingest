@@ -1,7 +1,7 @@
 """Deciding which gameweek is ready to ingest.
 
-Pure logic — the caller supplies the R2 idempotency check and the fixtures
-fetch as callables, so this module needs no network and no bucket.
+The idempotency check and the fixtures fetch arrive as callables, keeping this
+module free of the network and the bucket.
 """
 
 from __future__ import annotations
@@ -27,11 +27,10 @@ class Target:
 
 
 def partial_metadata(target: Target) -> dict[str, str]:
-    """R2 object metadata marking a gameweek ingested with fixtures outstanding.
+    """R2 metadata marking a gameweek ingested with fixtures outstanding.
 
-    Carried as metadata rather than injected into the payload, so the stored
-    bytes stay identical to what the API returned and the key stays stable for
-    the idempotency check.
+    Living in metadata keeps the stored body exactly as the API returned it and
+    leaves the key stable for the idempotency check.
     """
     if not target.partial:
         return {}
@@ -39,15 +38,6 @@ def partial_metadata(target: Target) -> dict[str, str]:
         "partial": "true",
         "pending-fixtures": ",".join(str(i) for i in target.pending_fixture_ids),
     }
-
-
-def settled_gameweeks(events: Iterable[Event]) -> list[int]:
-    """Gameweek numbers that FPL has finished *and* verified, ascending.
-
-    `finished` alone is not enough: bonus points and autosubs are still revised
-    for a few hours after the last whistle. `data_checked` is the settle signal.
-    """
-    return sorted(e["id"] for e in events if e.get("finished") and e.get("data_checked"))
 
 
 def _kickoff(fixture: Fixture) -> datetime | None:
@@ -59,16 +49,14 @@ def _kickoff(fixture: Fixture) -> datetime | None:
 
 
 def is_effectively_complete(fixtures: Iterable[Fixture], now: datetime) -> tuple[bool, list[int]]:
-    """Whether a gameweek is done bar one or more postponed fixtures.
+    """Report whether a gameweek is done bar one or more postponed fixtures.
 
-    A single rescheduled match holds `data_checked` at false for its whole
-    gameweek, potentially for months. If every unfinished fixture in the event
-    has no kickoff time or one far in the future, the rest of the gameweek's
-    data is stable and worth capturing — flagged partial.
+    One rescheduled match holds a gameweek unverified for months. Once every
+    unfinished fixture has a null or distant kickoff, the rest of the gameweek
+    has stabilised and is worth capturing.
 
-    Returns ``(complete, pending_fixture_ids)``. All fixtures finished but
-    `data_checked` still false is *not* complete: that is the normal
-    bonus-points settling window, not a postponement.
+    Returns ``(complete, pending_fixture_ids)``. A gameweek whose fixtures have
+    all finished is still settling its bonus points, and reads as incomplete.
     """
     unfinished = [f for f in fixtures if not f.get("finished")]
     if not unfinished:
@@ -90,11 +78,12 @@ def resolve_target(
     fetch_fixtures: Callable[[int], list[Fixture]],
     now: datetime | None = None,
 ) -> Target | None:
-    """The earliest gameweek that is ready and not yet in the bucket.
+    """The earliest gameweek that is ready and absent from the bucket, else None.
 
-    Returns ``None`` on the common day, when there is nothing new. At most one
-    gameweek per run, so a backlog is worked off one per day rather than in one
-    long burst.
+    Ready means `data_checked`, since bonus points and autosubs go on being
+    revised for hours after the last whistle, or held up by postponed fixtures
+    alone, which returns a partial target. Yields at most one gameweek a call,
+    so a backlog clears one run at a time.
     """
     now = now or datetime.now(UTC)
 
@@ -105,7 +94,7 @@ def resolve_target(
         if event.get("data_checked"):
             return Target(gw)
 
-        # Finished but unverified — the only case worth the extra fixtures call.
+        # Finished but unverified. The one case worth an extra fixtures call.
         complete, pending = is_effectively_complete(fetch_fixtures(gw), now)
         if complete:
             return Target(gw, partial=True, pending_fixture_ids=pending)

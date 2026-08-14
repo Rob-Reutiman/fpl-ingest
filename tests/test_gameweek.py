@@ -4,12 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fpl.gameweek import (
-    is_effectively_complete,
-    partial_metadata,
-    resolve_target,
-    settled_gameweeks,
-)
+from fpl.gameweek import is_effectively_complete, partial_metadata, resolve_target
 
 from .conftest import make_event, make_fixture
 
@@ -32,27 +27,6 @@ def _resolve(events, *, ingested=(), fixtures=None):
         now=NOW,
     )
     return target, calls
-
-
-# -- settled_gameweeks --------------------------------------------------------
-
-
-def test_settled_requires_both_finished_and_data_checked():
-    events = [
-        make_event(1, finished=True, data_checked=True),
-        make_event(2, finished=True, data_checked=False),
-        make_event(3, finished=False, data_checked=False),
-        make_event(4, finished=True, data_checked=True),
-    ]
-    assert settled_gameweeks(events) == [1, 4]
-
-
-def test_settled_is_ascending_regardless_of_input_order():
-    events = [
-        make_event(9, finished=True, data_checked=True),
-        make_event(2, finished=True, data_checked=True),
-    ]
-    assert settled_gameweeks(events) == [2, 9]
 
 
 # -- resolve_target -----------------------------------------------------------

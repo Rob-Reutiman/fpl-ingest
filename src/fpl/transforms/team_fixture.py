@@ -1,8 +1,7 @@
-"""`fact_team_fixture` — fully derived, never ingested.
+"""Derives `fact_team_fixture` from the player facts.
 
-The spec regenerates this from `fact_player_fixture` + `dim_fixture` on every
-pipeline run, so both pipelines must derive it identically or a season loaded live
-won't be comparable with one loaded from the archive. Hence one implementation.
+One implementation, shared by both pipelines, so that a season built live and a
+season built from the archive stay comparable.
 """
 
 from __future__ import annotations
@@ -13,9 +12,9 @@ import duckdb
 
 logger = logging.getLogger(__name__)
 
-# `expected_goals_conceded` and the opponent's summed `expected_goals` measure the
-# same thing by different routes, so they should track closely. A gap this wide on
-# a single fixture means either an aggregation bug or a bad source row.
+# Reported xGC and the opponent's summed xG measure one quantity by two routes,
+# so they track closely. A gap this wide on one fixture points at an aggregation
+# bug or a bad source row.
 XGC_DIVERGENCE_THRESHOLD = 1.0
 
 
@@ -27,20 +26,16 @@ def build_fact_team_fixture(
     fixtures: str = "dim_fixture",
     table: str = "fact_team_fixture",
 ) -> None:
-    """Two rows per fixture, one per side.
+    """Build two rows per fixture, one per side.
 
-    `xgc_reported` uses MAX, never SUM. `expected_goals_conceded` is recorded per
-    player and every player who played the full match carries the *same* value, so
-    summing it gives roughly 10x the truth (~11x measured on real fixtures). The
-    primary xGA measure is the opponent's summed `expected_goals`; the reported
-    figure is kept only as a cross-check.
+    `xgc_reported` takes MAX. `expected_goals_conceded` is a team figure copied
+    onto every player row, so a SUM would return roughly eleven times the value.
+    It serves as a cross check on `xg_against`, which sums the opponent's xG.
 
-    The sums are ordered by `element_id`. Floating-point addition isn't associative,
-    so DuckDB's parallel aggregation otherwise returns last-bit-different totals from
-    one run to the next — enough that a re-run rewrites hundreds of rows with
-    cosmetically different values. Ordering pins the addition order without changing
-    the arithmetic. The carry-along columns use `min` for the same reason: every row
-    in a group holds the same value, but `any_value` doesn't promise which it returns.
+    The sums carry an ORDER BY and the group constants use `min`, which together
+    fix the output bytes. Floating point addition is not associative, so parallel
+    aggregation over an arbitrary order returns totals differing in the last bit
+    from run to run, enough to rewrite hundreds of rows.
     """
     con.execute(
         f"""
@@ -96,12 +91,11 @@ def build_fact_team_fixture(
 def warn_on_xgc_divergence(
     con: duckdb.DuckDBPyConnection, season: str, table: str = "fact_team_fixture"
 ) -> int:
-    """Log where the reported xGC and the opponent's summed xG disagree materially.
+    """Log the team fixtures where reported xGC and opponent xG diverge.
 
-    A warning, not a failure: they are two different measurements and some drift is
-    expected. A large gap points at a bad source row — 2023-24's archive has a
-    handful where one substitute carries a wildly different value from his
-    ninety-minute team-mates.
+    Returns the count. Two measurements drift a little as a matter of course, so
+    this warns and continues. The 2023 season holds a handful of source rows
+    where a substitute carries a wildly different value from their teammates.
     """
     row = con.execute(
         f"SELECT count(*) FROM {table} "

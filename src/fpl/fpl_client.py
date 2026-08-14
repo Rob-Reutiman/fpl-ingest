@@ -1,8 +1,7 @@
 """HTTP client for the public FPL API.
 
-Every method returns the response body verbatim — callers that need structure
-parse it themselves. Keeping the bytes intact is what lets the ingest jobs
-write exactly what the API returned.
+Every method returns the response body verbatim, leaving callers to parse it.
+Intact bytes are what let the jobs store exactly what the API returned.
 """
 
 from __future__ import annotations
@@ -33,11 +32,15 @@ logger = logging.getLogger(__name__)
 
 
 def _is_retryable(exc: BaseException) -> bool:
-    """Transient failures only — a 404 means the resource isn't there yet."""
+    """True for a failure a second attempt might clear.
+
+    Throttling, server faults and transport trouble qualify. A 404 stands as an
+    answer, since an unopened gameweek stays unopened.
+    """
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         return code == 429 or code >= 500
-    # Covers timeouts, connection resets and protocol errors.
+    # Timeouts, connection resets and protocol errors.
     return isinstance(exc, httpx.TransportError)
 
 
@@ -80,7 +83,7 @@ class FPLClient:
             self._client.close()
             self._client = None
 
-    # -- Endpoints ------------------------------------------------------------
+    # Endpoints
 
     def bootstrap_static(self) -> bytes:
         return self.get("bootstrap-static/")
@@ -93,7 +96,7 @@ class FPLClient:
         return self.get(f"event/{gw}/live/")
 
     def element_summary(self, element_id: int) -> bytes:
-        """One player's per-fixture history. Only needed for double gameweeks."""
+        """One player's season at fixture grain."""
         return self.get(f"element-summary/{element_id}/")
 
     def standings_page(self, page: int) -> bytes:
@@ -105,10 +108,10 @@ class FPLClient:
     def entry_picks(self, entry_id: int, gw: int) -> bytes:
         return self.get(f"entry/{entry_id}/event/{gw}/picks/")
 
-    # -- Transport ------------------------------------------------------------
+    # Transport
 
     def get(self, path: str, *, params: dict[str, Any] | None = None) -> bytes:
-        """GET the path relative to the API base and return the raw body."""
+        """GET a path relative to the API base and return the raw body."""
         url = f"{self._base_url}/{path.lstrip('/')}"
         return self._retrying(self._request, url, params)
 

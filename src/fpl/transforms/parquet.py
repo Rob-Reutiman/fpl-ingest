@@ -1,7 +1,7 @@
 """Writing curated files, and reading existing ones back.
 
-Every curated Parquet file in the bucket is written by `write_parquet`, so the
-column contract and the deterministic ordering are applied in exactly one place.
+Every curated file in the bucket goes through `write_parquet`, which applies the
+column contract and the deterministic ordering in one place.
 """
 
 from __future__ import annotations
@@ -30,11 +30,11 @@ def write_parquet(
     destination: Path,
     order_by: Sequence[str] | None = None,
 ) -> Path:
-    """Project a table through the column contract and write one zstd Parquet file.
+    """Project a table through the column contract into one zstd Parquet file.
 
-    The explicit ORDER BY is what makes a re-run reproduce the same file rather
-    than the same rows in whatever order the joins happened to produce. Defaults
-    to the contract's sort key for the table.
+    The explicit ORDER BY, defaulting to the contract's sort key, fixes the row
+    order that the joins would otherwise leave to chance, and with it the bytes
+    a rerun produces.
     """
     if order_by is None:
         order_by = curated_schema.sort_key(table)
@@ -58,17 +58,16 @@ def to_parquet_bytes(
     scratch: Path,
     order_by: Sequence[str] | None = None,
 ) -> bytes:
-    """`write_parquet` into a scratch directory and hand back the bytes to upload."""
+    """Write the table to a scratch file and return its bytes for upload."""
     return write_parquet(con, table, scratch / f"{table}.parquet", order_by).read_bytes()
 
 
 def register_parquet(
     con: duckdb.DuckDBPyConnection, name: str, body: bytes | None, scratch: Path
 ) -> bool:
-    """Register previously-written Parquet bytes as a view. False if there were none.
+    """Register downloaded Parquet bytes as a view. False if there were none.
 
-    Curated files are read back whenever a job appends to one — DuckDB reads from a
-    path, so the bytes land in a scratch file first.
+    DuckDB reads from a path, so the bytes land in a scratch file first.
     """
     if body is None:
         return False
@@ -95,7 +94,7 @@ def review_csv_bytes(rows: Iterable[ReviewRow], scratch: Path) -> bytes:
 
 
 def parse_review_csv(body: bytes | None) -> list[ReviewRow]:
-    """Read back an existing review file so new findings append rather than replace."""
+    """Parse an existing review file, so this run's findings append to it."""
     if not body:
         return []
     reader = csv.DictReader(body.decode("utf-8").splitlines())

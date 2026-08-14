@@ -40,21 +40,23 @@ uv run python -m fpl.jobs.backfill --dry-run --cache-dir data/archive --staging-
 Keep that separation. Detection and sampling rules go in the pure modules, not
 inlined next to a request.
 
-## Backfill notes
+## Transform notes
 
 - `curated_schema.py` is the transcription of `fpl-parquet-schemas.md`. The spec is the
   contract: don't add, drop or reorder a column in one place only, and update the spec
   document first if a column genuinely needs to change.
-- Source CSVs are read `all_varchar=true` and cast explicitly. Type sniffing drifts between
-  seasons — an all-empty column infers as BOOLEAN and the multi-season glob stops unioning.
+- Sources are read as text and cast explicitly, never inferred. Type sniffing drifts
+  between seasons — an all-empty column infers as BOOLEAN and the glob stops unioning.
 - A missing stat is NULL, never 0. This is load-bearing for `defensive_contribution`.
 - `expected_goals_conceded` is a *team* figure stored on every player row. Aggregate it with
   MAX; SUM gives ~11x.
 - Aggregations that feed a written file need a deterministic order (`sum(x ORDER BY ...)`,
   `min` over carry-alongs). Floating-point addition isn't associative, so parallel
   aggregation otherwise makes re-runs rewrite rows with last-bit-different values.
-- Cross-season player matching leads with `players_raw.code`, not the name. Names get
+- Cross-season player matching leads with the stable `code`, not the name. Names get
   relisted between seasons; the code doesn't.
+- The README is public-facing and covers what the data is and how to query it. Rationale
+  for *why* the pipeline is built this way belongs here, not there.
 
 ## Conventions
 

@@ -1,7 +1,7 @@
 """DuckDB transforms shared by the live ingest and the historical backfill.
 
-Pure logic: every function takes a DuckDB connection and writes local files. The
-jobs own the bucket. Anything both pipelines must do identically — deriving
-`fact_team_fixture`, projecting through the column contract, extending the master
-tables — belongs here rather than in one pipeline with the other reimplementing it.
+Every function takes a DuckDB connection and writes local files, leaving the
+bucket to the jobs. Work that both pipelines must perform identically lives
+here, so that deriving `fact_team_fixture`, projecting through the column
+contract and extending the master tables each have one implementation.
 """

@@ -14,18 +14,18 @@ from fpl.constants import (
 
 
 def seeded_rng(season: str, gw: int) -> random.Random:
-    """Deterministic per-gameweek RNG, so a re-run repeats the same draw."""
+    """Return a generator seeded on the season and gameweek, so a rerun repeats it."""
     return random.Random(f"{season}:{gw}")
 
 
 def select_pages(rng: random.Random) -> list[int]:
-    """Pick the standings pages to sample from the 1,001–10,000 rank range."""
+    """Choose the standings pages covering ranks 1,001 to 10,000."""
     population = range(SAMPLE_PAGE_START, SAMPLE_PAGE_END + 1)
     return sorted(rng.sample(population, SAMPLE_PAGE_COUNT))
 
 
 def select_entries(entries: list[dict[str, Any]], rng: random.Random) -> list[dict[str, Any]]:
-    """Pick a subset of one page's entries, preserving standings order."""
+    """Choose a subset of one page's entries, keeping standings order."""
     count = min(ENTRIES_PER_SAMPLED_PAGE, len(entries))
     chosen = rng.sample(range(len(entries)), count)
     return [entries[i] for i in sorted(chosen)]

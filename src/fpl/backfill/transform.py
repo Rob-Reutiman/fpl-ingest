@@ -1,13 +1,12 @@
-"""DuckDB transforms from archive CSV to the curated schema.
+"""DuckDB transforms from the archive CSVs to the curated schema.
 
-Everything is loaded as VARCHAR and cast explicitly against `curated_schema`. CSV
-type sniffing looks convenient right up to the season where a column is empty
-throughout and gets inferred as BOOLEAN, at which point a multi-season glob stops
-unioning. Casting from text costs nothing at 30k rows and can't drift.
+Everything is read as VARCHAR and cast explicitly. Type sniffing holds up right
+until a season where some column sits empty throughout, infers as BOOLEAN, and
+drops that season out of the glob. Casting from text is free at 30k rows.
 
-Source columns absent from a season are injected as typed NULLs — never as 0.
-"NULL" means the stat wasn't measured that season; 0 means it was measured and was
-zero, and conflating them poisons any cross-season model.
+A column that a season's source predates arrives as a typed NULL, which reads as
+unmeasured. A 0 would assert the stat was measured and came out zero, and any
+model spanning seasons would take that at face value.
 """
 
 from __future__ import annotations
@@ -26,16 +25,15 @@ logger = logging.getLogger(__name__)
 
 SOURCE_TAG = "archive_backfill"
 
-# Spec columns sourced from merged_gw.csv that some seasons predate. Probed per
-# season and NULL-filled when absent (`defensive_contribution` arrived in 2025-26).
+# Contract columns that some seasons predate. FPL introduced
+# `defensive_contribution` in 2025. Probed per season and NULL filled if absent.
 OPTIONAL_FACT_COLUMNS: dict[str, str] = {
     "starts": "TINYINT",
     "defensive_contribution": "SMALLINT",
 }
 
-# In merged_gw.csv, `element_type` is not present; the per-row `position` string is,
-# and it reflects the player's position *at that fixture*, which is what the spec
-# wants. Managers are dropped here and nowhere else.
+# The source carries a `position` string on every row, holding the position the
+# player held at that fixture, and maps to `element_type` through this.
 _ELEMENT_TYPE_CASE = " ".join(
     f"WHEN '{label}' THEN {value}" for label, value in curated_schema.ARCHIVE_POSITIONS.items()
 )
@@ -45,14 +43,15 @@ _POSITION_LABEL_CASE = " ".join(
 
 
 def _csv(path: Path) -> str:
-    """A read_csv call that reads everything as text and keeps empties as NULL."""
+    """A read_csv call taking every column as text and every empty as NULL."""
     return (
         f"read_csv('{path.as_posix()}', all_varchar=true, header=true, "
         "sample_size=-1, nullstr=['', 'NA', 'None'])"
     )
 
 
-def _header(con: duckdb.DuckDBPyConnection, path: Path) -> set[str]:
+def _source_columns(con: duckdb.DuckDBPyConnection, path: Path) -> set[str]:
+    """The column names a CSV actually carries, without reading its rows."""
     return {row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {_csv(path)}").fetchall()}
 
 
@@ -66,7 +65,7 @@ def load_season_sources(con: duckdb.DuckDBPyConnection, sources: SeasonSources) 
     logger.info("loaded %s source CSVs for %s", len(sources.paths) - 1, sources.season)
 
 
-# -- Teams --------------------------------------------------------------------
+# Teams
 
 
 def build_dim_team(con: duckdb.DuckDBPyConnection, season: str) -> None:
@@ -91,11 +90,11 @@ def build_dim_team(con: duckdb.DuckDBPyConnection, season: str) -> None:
     )
 
 
-# -- Players ------------------------------------------------------------------
+# Players
 
 
 def read_season_players(con: duckdb.DuckDBPyConnection, season: str) -> list[SeasonPlayer]:
-    """The identity module's input: one row per player, with their club's code."""
+    """One row per player, carrying the stable code that identity matching uses."""
     rows = con.execute(
         """
         SELECT
@@ -128,7 +127,7 @@ def read_season_players(con: duckdb.DuckDBPyConnection, season: str) -> list[Sea
 def register_master_map(
     con: duckdb.DuckDBPyConnection, season: str, assigned: dict[int, int]
 ) -> None:
-    """Materialize `{element_id: player_master_id}` so SQL can join to it."""
+    """Materialize the element to master id mapping as a table SQL can join."""
     con.execute(
         "CREATE OR REPLACE TABLE player_map (season VARCHAR, element_id INTEGER, "
         "player_master_id INTEGER)"
@@ -161,7 +160,7 @@ def build_dim_player(con: duckdb.DuckDBPyConnection, season: str) -> None:
     )
 
 
-# -- Fixtures and gameweeks ---------------------------------------------------
+# Fixtures and gameweeks
 
 
 def build_dim_fixture(con: duckdb.DuckDBPyConnection, season: str) -> None:
@@ -191,12 +190,11 @@ def build_dim_fixture(con: duckdb.DuckDBPyConnection, season: str) -> None:
 
 
 def build_dim_gameweek(con: duckdb.DuckDBPyConnection, season: str) -> None:
-    """Derived from the fixture list — the archive has no events file.
+    """Derive one row per gameweek from the fixture list.
 
-    `deadline_time`, the scoring aggregates and the `most_*` columns are
-    unobtainable after the fact and are written NULL, as the spec documents for
-    archive-backfilled seasons. The full column set is still present so the file
-    unions with the live pipeline's fully-populated rows.
+    The archive holds no events file, so deadlines, scoring aggregates and the
+    `most_*` columns arrive NULL. The full column set is present, letting the
+    file union with seasons captured live where every column is populated.
     """
     con.execute(
         f"""
@@ -222,21 +220,21 @@ def build_dim_gameweek(con: duckdb.DuckDBPyConnection, season: str) -> None:
     )
 
 
-# -- Facts --------------------------------------------------------------------
+# Facts
 
 
 def build_fact_source(con: duckdb.DuckDBPyConnection, sources: SeasonSources) -> list[str]:
-    """`merged_gw` deduplicated and typed, the shared base for both fact tables.
+    """The deduplicated, typed base that both fact tables build on.
 
-    Returns the spec columns this season's source lacks, which are NULL-filled.
+    Returns the contract columns absent from this season, which arrive NULL.
 
-    2025-26's merged_gw carries 10 byte-identical duplicate rows (an archive
-    artifact). DISTINCT absorbs them; validation then asserts the key is unique, so
-    a *conflicting* duplicate — two different readings of one appearance — fails
-    loudly instead of being silently collapsed to whichever row sorts first.
+    The 2025 season carries 10 duplicate rows identical to the byte, an archive
+    artifact that DISTINCT absorbs. Validation then asserts the key really is
+    unique, so a pair of rows that share a key while disagreeing on the stats
+    stops the run.
     """
-    present = _header(con, sources.path("merged_gw.csv"))
-    optional = ",\n            ".join(
+    present = _source_columns(con, sources.path("merged_gw.csv"))
+    optional_columns = ",\n            ".join(
         f"CAST({name} AS {duck_type}) AS {name}"
         if name in present
         else f"CAST(NULL AS {duck_type}) AS {name}"
@@ -287,7 +285,7 @@ def build_fact_source(con: duckdb.DuckDBPyConnection, sources: SeasonSources) ->
             CAST(transfers_in AS INTEGER) AS transfers_in,
             CAST(transfers_out AS INTEGER) AS transfers_out,
             CAST(transfers_balance AS INTEGER) AS transfers_balance,
-            {optional}
+            {optional_columns}
         FROM (SELECT DISTINCT * FROM src_merged_gw)
         WHERE position NOT IN ({excluded})
         """
@@ -296,7 +294,7 @@ def build_fact_source(con: duckdb.DuckDBPyConnection, sources: SeasonSources) ->
 
 
 def count_excluded_rows(con: duckdb.DuckDBPyConnection) -> tuple[int, int]:
-    """(manager rows dropped, exact duplicate rows collapsed) — for the report."""
+    """Count the assistant manager rows dropped and the duplicates collapsed."""
     excluded = ", ".join(f"'{p}'" for p in sorted(curated_schema.EXCLUDED_POSITIONS))
     managers = con.execute(
         f"SELECT count(*) FROM src_merged_gw WHERE position IN ({excluded})"
@@ -311,13 +309,12 @@ def count_excluded_rows(con: duckdb.DuckDBPyConnection) -> tuple[int, int]:
 def build_fact_player_fixture(con: duckdb.DuckDBPyConnection, season: str) -> None:
     """One row per `(season, element_id, fixture_id)`.
 
-    Team attribution is pinned to the fixture via merged_gw's own `team` name, not
-    joined from `dim_player` — a January transfer would otherwise retroactively
-    reattribute the player's earlier fixtures to their new club.
+    The club comes from the source row's own `team` name, which pins it to the
+    fixture and leaves a January transfer with no reach over matches the player
+    had already played.
 
-    Blank gameweeks need no handling: a team with no fixture simply has no source
-    rows, which is exactly the "no row at all" rule. Validation asserts it rather
-    than trusting it.
+    A club with no fixture carries no source rows, so a blank gameweek stays
+    blank of its own accord. Validation asserts as much.
     """
     con.execute(
         f"""
@@ -371,11 +368,11 @@ def build_fact_player_fixture(con: duckdb.DuckDBPyConnection, season: str) -> No
 
 
 def build_fact_player_gameweek_fpl(con: duckdb.DuckDBPyConnection, season: str) -> None:
-    """The FPL game layer at gameweek grain.
+    """Price and ownership history, at one row per player per gameweek.
 
-    Price and ownership are gameweek-level, so a double gameweek repeats them on
-    both fixture rows. DISTINCT collapses that; validation asserts the repeated
-    values actually agree rather than assuming it.
+    These sit at gameweek grain, so a double gameweek repeats them across both
+    fixture rows. DISTINCT collapses the repeat and validation asserts the two
+    rows did agree.
     """
     con.execute(
         f"""
@@ -396,13 +393,13 @@ def build_fact_player_gameweek_fpl(con: duckdb.DuckDBPyConnection, season: str) 
     )
 
 
-# -- Master tables ------------------------------------------------------------
+# Master tables
 
 
 def build_team_master(con: duckdb.DuckDBPyConnection) -> None:
-    """`short_name` is stable across seasons, so it *is* the master id.
+    """Build the team master tables from `all_dim_team`, staged across seasons.
 
-    Reads every season's `dim_team` rows, already staged as `all_dim_team`.
+    A club's `short_name` outlives a season, so it serves as the master id.
     """
     con.execute(
         """
@@ -448,6 +445,3 @@ def register_player_master(
         "(player_master_id INTEGER, season VARCHAR, element_id INTEGER)"
     )
     con.executemany("INSERT INTO map_player_season VALUES (?, ?, ?)", list(season_map))
-
-
-# -- Output -------------------------------------------------------------------

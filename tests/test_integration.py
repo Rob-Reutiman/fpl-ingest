@@ -15,7 +15,6 @@ import pytest
 
 from fpl.constants import ENTRIES_PER_PAGE
 from fpl.fpl_client import FPLClient
-from fpl.gameweek import settled_gameweeks
 from fpl.season import derive_season
 
 pytestmark = pytest.mark.integration
@@ -33,7 +32,7 @@ def bootstrap(client: FPLClient) -> dict:
 
 
 def test_season_is_still_derivable_from_the_live_response(bootstrap: dict):
-    assert re.fullmatch(r"\d{2}-\d{2}", derive_season(bootstrap))
+    assert re.fullmatch(r"\d{4}-\d{2}", derive_season(bootstrap))
 
 
 def test_events_carry_the_fields_the_detector_relies_on(bootstrap: dict):
@@ -41,7 +40,6 @@ def test_events_carry_the_fields_the_detector_relies_on(bootstrap: dict):
     assert len(events) >= 38
     for event in events:
         assert {"id", "finished", "data_checked"} <= event.keys()
-    settled_gameweeks(events)  # must not raise
 
 
 def test_fixtures_expose_finished_and_kickoff_time(client: FPLClient):
@@ -64,7 +62,7 @@ def test_overall_league_standings_page_shape(client: FPLClient):
 
 
 def test_live_stats_for_a_settled_gameweek(client: FPLClient, bootstrap: dict):
-    settled = settled_gameweeks(bootstrap["events"])
+    settled = sorted(e["id"] for e in bootstrap["events"] if e["finished"] and e["data_checked"])
     if not settled:
         pytest.skip("no gameweek has settled yet this season")
     live = json.loads(client.event_live(settled[0]))

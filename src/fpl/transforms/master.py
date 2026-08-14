@@ -1,19 +1,13 @@
-"""Extending the cross-season master tables from a live bootstrap.
+"""Reads, extends and writes back the master tables spanning every season.
 
-The backfill assigns `player_master_id`s for historical seasons; the live jobs
-extend the same tables as new players arrive. Both go through `fpl.identity`, so
-the matching tiers are defined once — a second implementation here would drift and
-start splitting careers the backfill had already joined.
-
-Every job that writes a `player_master_id` calls `resolve`, because a player can
-appear mid-week (a transfer, a promoted club's late squad registration) and a job
-that assumed Job 1 had already seen them would fail on a missing id.
+The storage layer around `fpl.identity`, which does the matching. Transfers and
+late squad registrations land midweek, so any job can be the first to meet a new
+player and each resolves the tables for itself before writing a master id.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,25 +22,13 @@ logger = logging.getLogger(__name__)
 
 REVIEW_FILENAME = "player_match_review.csv"
 
-# bootstrap-static carries assistant managers as element_type 5 in the seasons that
-# had them. The schema defines 1-4, so they never reach a curated table.
+# Goalkeeper, defender, midfielder, forward. Bootstrap also carries assistant
+# managers as type 5, an asset that falls outside the schema.
 PLAYER_ELEMENT_TYPES = (1, 2, 3, 4)
 
 
-@dataclass
-class Resolution:
-    """The outcome of resolving one season's squads against the master tables."""
-
-    players: dict[int, int]
-    """element_id -> player_master_id"""
-    teams: dict[int, str]
-    """team_id -> team_master_id"""
-    new_player_ids: int
-    new_review_rows: int
-
-
 def team_master_ids(teams: list[dict[str, Any]]) -> dict[int, str]:
-    """`short_name` is stable across seasons, so it *is* the team master id."""
+    """Map each team id to its master id. A club's `short_name` outlives a season."""
     return {int(team["id"]): team["short_name"] for team in teams}
 
 
@@ -76,7 +58,7 @@ def _int_or_none(value: Any) -> int | None:
 
 
 class MasterTables:
-    """Loads the master tables from R2, extends them, and writes back if changed."""
+    """Loads the master tables from R2, extends them, and writes back on a change."""
 
     def __init__(self, store: ObjectStore, scratch: Path) -> None:
         self._store = store
@@ -91,7 +73,7 @@ class MasterTables:
         self._team_master_rows = self._load_table("dim_team_master")
         self._dirty = False
 
-    # -- Loading --------------------------------------------------------------
+    # Loading
 
     def _load_table(self, table: str) -> list[tuple[Any, ...]]:
         body = self._store.get_bytes(keys.master_key(f"{table}.parquet"))
@@ -105,9 +87,10 @@ class MasterTables:
         logger.info("loaded %d existing master players", len(rows))
         return [MasterPlayer(*row) for row in rows]
 
-    # -- Resolving ------------------------------------------------------------
+    # Resolving
 
-    def resolve(self, season: str, bootstrap: dict[str, Any]) -> Resolution:
+    def resolve(self, season: str, bootstrap: dict[str, Any]) -> dict[int, int]:
+        """Assign every player in this bootstrap a master id. Returns the mapping."""
         teams = team_master_ids(bootstrap["teams"])
         players = season_players(bootstrap["elements"], teams, season)
 
@@ -128,12 +111,7 @@ class MasterTables:
             )
 
         self._merge_season_maps(season, assigned, teams, bootstrap["teams"])
-        return Resolution(
-            players=assigned,
-            teams=teams,
-            new_player_ids=new_ids,
-            new_review_rows=new_review,
-        )
+        return assigned
 
     def _merge_season_maps(
         self,
@@ -142,7 +120,7 @@ class MasterTables:
         teams: dict[int, str],
         team_rows: list[dict[str, Any]],
     ) -> None:
-        """Replace this season's rows in the season maps, keeping other seasons."""
+        """Replace this season's rows in the season maps, holding the others."""
         players = [(master_id, season, element_id) for element_id, master_id in assigned.items()]
         self._map_rows = self._replace_season(self._map_rows, players, season)
 
@@ -159,45 +137,46 @@ class MasterTables:
                 row[3] = max(row[3], season)
             else:
                 merged[short] = [short, name, season, season]
-        self._team_master_rows = self._commit(
+        self._team_master_rows = self._replace_if_changed(
             self._team_master_rows, [tuple(row) for row in merged.values()]
         )
 
     def _replace_season(
         self, existing: list[tuple[Any, ...]], rows: list[tuple[Any, ...]], season: str
     ) -> list[tuple[Any, ...]]:
-        """Swap out one season's rows, leaving every other season's untouched."""
-        return self._commit(existing, [row for row in existing if row[1] != season] + rows)
+        """Swap out one season's rows, holding every other season as it stands."""
+        return self._replace_if_changed(
+            existing, [row for row in existing if row[1] != season] + rows
+        )
 
-    def _commit(
+    def _replace_if_changed(
         self, existing: list[tuple[Any, ...]], rebuilt: list[tuple[Any, ...]]
     ) -> list[tuple[Any, ...]]:
-        """Keep the rebuilt rows, flagging a write only if the content really moved.
+        """Take the rebuilt rows, marking dirty once the content really moves.
 
-        Sorted before comparing: rows read back from Parquet arrive in the file's
-        sort order, which isn't the order they were assembled in, and an hourly job
-        that rewrote four files every run over a spurious diff would churn the
-        bucket for nothing.
+        Both sides sort first. Rows read back from Parquet arrive in the file's
+        sort order, and comparing that against assembly order alone would have
+        every hourly run rewrite every table.
         """
         rebuilt = sorted(rebuilt)
         if rebuilt != sorted(existing):
             self._dirty = True
         return rebuilt
 
-    # -- Writing --------------------------------------------------------------
+    # Writing
 
     @property
     def changed(self) -> bool:
-        """Whether anything actually moved. Hourly no-op runs shouldn't rewrite."""
+        """True once this run has produced something the bucket lacks."""
         return self._dirty or bool(self._registry.review)
 
     @property
     def review_rows(self) -> list[ReviewRow]:
-        """Existing findings plus this run's — the file accumulates, never resets."""
+        """Existing findings plus this run's. The file accumulates."""
         return self._existing_review + self._registry.review
 
     def write(self, store: ObjectStore) -> list[str]:
-        """Write the four master tables and the review file. Returns keys written."""
+        """Write the four master tables and the review file. Returns the keys."""
         self._stage()
         written: list[str] = []
         for table in curated_schema.MASTER_TABLES:
@@ -246,7 +225,7 @@ class MasterTables:
 def register_player_map(
     con: duckdb.DuckDBPyConnection, season: str, assigned: dict[int, int]
 ) -> None:
-    """Materialize `{element_id: player_master_id}` so a transform can join to it."""
+    """Materialize the element to master id mapping as a table SQL can join."""
     con.execute(
         "CREATE OR REPLACE TABLE player_map "
         "(season VARCHAR, element_id INTEGER, player_master_id INTEGER)"

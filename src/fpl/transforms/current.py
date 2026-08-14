@@ -1,13 +1,11 @@
-"""Job 1's transforms: the live snapshot and the season's dimensions.
+"""The live snapshot and the season's dimension tables.
 
-Source is one `bootstrap-static` and one `fixtures` response. Everything here is
-overwritten on every run — these tables describe the present, not history.
+Built from one bootstrap and one fixtures response, and rewritten whole on every
+run, since these tables describe the present.
 
-The JSON is loaded through DuckDB's `read_json` and every column is cast
-explicitly against the contract. FPL sends plenty of numbers as strings
-(`selected_by_percent`, `form`, `ep_this`) and nulls freely in the optional
-fields, so inference would give a different physical type on a quiet day than on
-a busy one and break the multi-season glob.
+Every column is cast explicitly. FPL sends many numbers as strings and nulls the
+optional fields freely, so inference would settle on a different physical type
+on a quiet day than on a busy one and break the glob.
 """
 
 from __future__ import annotations
@@ -37,11 +35,11 @@ def load_snapshot(
     bootstrap: dict[str, Any],
     fixtures: list[dict[str, Any]],
 ) -> None:
-    """Register the two API responses as `src_element`, `src_team`, ... views.
+    """Register the two API responses as the `src_element`, `src_team` views.
 
-    Written out and read back with `read_json` rather than handed over row by row:
-    it keeps the transforms as SQL over the API's own shape, so a new field is one
-    line of SQL rather than a plumbing change.
+    Writing the payloads out and reading them back keeps the transforms as plain
+    SQL over the shape the API returns, where picking up a new field costs one
+    more line of SQL.
     """
     scratch.mkdir(parents=True, exist_ok=True)
     for name, payload in (
@@ -104,10 +102,10 @@ def build_dim_player(con: duckdb.DuckDBPyConnection, season: str) -> None:
 
 
 def build_dim_fixture(con: duckdb.DuckDBPyConnection, season: str) -> None:
-    """Every fixture, played or not — this is the schedule as well as the results.
+    """Every fixture, played or otherwise. The schedule and the results.
 
-    `gameweek` is nullable on purpose: a postponed fixture has a null `event` until
-    it is rescheduled.
+    `gameweek` is nullable, since a postponed fixture carries a null `event`
+    until FPL reschedules it.
     """
     con.execute(
         f"""
@@ -135,11 +133,7 @@ def build_dim_fixture(con: duckdb.DuckDBPyConnection, season: str) -> None:
 
 
 def build_dim_gameweek(con: duckdb.DuckDBPyConnection, season: str) -> None:
-    """The live pipeline fills every column — `events[]` carries the lot.
-
-    Backfilled seasons leave the deadline and scoring columns NULL because the
-    archive has no events file; the column set is identical either way.
-    """
+    """One row per gameweek, every column populated from `events[]`."""
     con.execute(
         f"""
         CREATE OR REPLACE TABLE dim_gameweek AS
@@ -167,11 +161,10 @@ def build_dim_gameweek(con: duckdb.DuckDBPyConnection, season: str) -> None:
 
 
 def build_fpl_current(con: duckdb.DuckDBPyConnection, season: str, fetched_at: datetime) -> None:
-    """The live state snapshot: price, ownership, injuries, form.
+    """The live state snapshot. Price, ownership, injuries and form.
 
-    `fetched_at` is stamped from the run, not from anything in the payload — the
-    API doesn't say when its numbers were computed, and a consumer reading a stale
-    hourly file needs to know how stale it is.
+    `fetched_at` is stamped from the run, since the payload carries no timestamp
+    of its own and a consumer needs one to judge how stale the file has grown.
     """
     con.execute(
         f"""
@@ -214,7 +207,7 @@ TABLES = ("fpl_current", "dim_player", "dim_team", "dim_fixture", "dim_gameweek"
 
 
 def build_all(con: duckdb.DuckDBPyConnection, season: str, fetched_at: datetime) -> None:
-    """Teams first: the player and fixture tables join to it for master ids."""
+    """Build every table. Teams lead, as the others join to them for master ids."""
     build_dim_team(con, season)
     build_dim_player(con, season)
     build_dim_fixture(con, season)

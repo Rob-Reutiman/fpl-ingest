@@ -1,1 +1,1 @@
-"""Scheduled ingest jobs. Each module is runnable as `python -m fpl.jobs.<name>`."""
+"""Scheduled ingest jobs. Every module exposes a `main` and runs standalone."""

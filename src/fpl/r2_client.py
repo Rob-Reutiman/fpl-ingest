@@ -1,4 +1,4 @@
-"""Writes to Cloudflare R2 over its S3-compatible API."""
+"""Reads and writes Cloudflare R2 over its S3 compatible API."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _to_ndjson(records: Iterable[Any]) -> bytes:
 
 
 class ObjectStore(Protocol):
-    """The read/write surface the jobs depend on."""
+    """The read and write surface the jobs depend on."""
 
     def exists(self, key: str) -> bool: ...
 
@@ -53,7 +53,7 @@ class ObjectStore(Protocol):
 
 
 class R2Client:
-    """Thin boto3 wrapper. One PutObject per call — batch before you write."""
+    """Thin boto3 wrapper. One PutObject per call, so batch before writing."""
 
     def __init__(self, client: Any, bucket: str) -> None:
         self._client = client
@@ -70,8 +70,8 @@ class R2Client:
             region_name="auto",
             config=Config(
                 signature_version="s3v4",
-                # R2 rejects the CRC32 integrity headers boto3 >=1.36 sends by
-                # default on every upload.
+                # R2 rejects the CRC32 integrity headers that boto3 1.36 and
+                # above attach to every upload by default.
                 request_checksum_calculation="when_required",
                 response_checksum_validation="when_supported",
                 retries={"max_attempts": 3, "mode": "standard"},
@@ -90,7 +90,7 @@ class R2Client:
         return True
 
     def get_bytes(self, key: str) -> bytes | None:
-        """Return the object's bytes, or None if it isn't there."""
+        """The object's bytes, or None when the key is absent."""
         try:
             response = self._client.get_object(Bucket=self._bucket, Key=key)
         except ClientError as exc:
@@ -133,16 +133,17 @@ class R2Client:
 
 
 class DryRunStore:
-    """Logs what would be written. Reports every key as absent so a dry run
-    exercises the whole job rather than short-circuiting on idempotency."""
+    """Logs what a run would write, and reads every key as absent.
+
+    Reporting absence lets a dry run proceed without credentials and carry the
+    job past every idempotency check into the transforms.
+    """
 
     def exists(self, key: str) -> bool:
         logger.info("[dry-run] exists? %s -> False", key)
         return False
 
     def get_bytes(self, key: str) -> bytes | None:
-        # Reads would be harmless, but a dry run must work without credentials,
-        # so every key reads as absent — consistent with `exists`.
         logger.info("[dry-run] get %s -> absent", key)
         return None
 
