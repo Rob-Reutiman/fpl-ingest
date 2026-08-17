@@ -2,7 +2,9 @@
 
 A Fantasy Premier League data warehouse that builds itself. Scheduled GitHub Actions
 jobs pull from the [FPL public API](https://fantasy.premierleague.com/api/) into a
-Cloudflare R2 bucket and transform it into Parquet. 
+Cloudflare R2 bucket and transform it into Parquet for later analysis.
+
+> Not affiliated with the Premier League or Fantasy Premier League.
 
 ## Jobs
 Data is ingested via the following jobs:
@@ -103,5 +105,3 @@ normal but logs the writes instead of performing them:
 ```bash
 uv run python -m fpl.jobs.hourly_current --dry-run
 ```
-
-> Not affiliated with the Premier League or Fantasy Premier League.
