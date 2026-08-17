@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fpl.constants import POSTPONED_FIXTURE_THRESHOLD_HOURS
+from fpl.constants import SETTLEMENT_LEAD_HOURS
 
 Event = dict[str, Any]
 Fixture = dict[str, Any]
@@ -40,35 +40,34 @@ def partial_metadata(target: Target) -> dict[str, str]:
     }
 
 
-def _kickoff(fixture: Fixture) -> datetime | None:
-    raw = fixture.get("kickoff_time")
+def _parse_datetime(raw: str | None) -> datetime | None:
     if not raw:
         return None
     parsed = datetime.fromisoformat(raw)
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def is_effectively_complete(fixtures: Iterable[Fixture], now: datetime) -> tuple[bool, list[int]]:
-    """Report whether a gameweek is done bar one or more postponed fixtures.
+def is_effectively_complete(
+    fixtures: Iterable[Fixture], cutoff: datetime
+) -> tuple[bool, list[int]]:
+    """Report whether every unfinished fixture is stuck at or beyond `cutoff`.
 
-    One rescheduled match holds a gameweek unverified for months. Once every
-    unfinished fixture has a null or distant kickoff, the rest of the gameweek
-    has stabilised and is worth capturing.
+    A fixture counts as stuck once its kickoff is null or falls at or after
+    `cutoff`, meaning it cannot complete in the time available. A gameweek with
+    no unfinished fixtures at all is stuck by the same measure, vacuously.
 
-    Returns ``(complete, pending_fixture_ids)``. A gameweek whose fixtures have
-    all finished is still settling its bonus points, and reads as incomplete.
+    Returns ``(complete, pending_fixture_ids)``, the latter naming every
+    unfinished fixture when `complete` is true.
     """
     unfinished = [f for f in fixtures if not f.get("finished")]
-    if not unfinished:
-        return False, []
-
-    horizon = now + timedelta(hours=POSTPONED_FIXTURE_THRESHOLD_HOURS)
-    for fixture in unfinished:
-        kickoff = _kickoff(fixture)
-        if kickoff is not None and kickoff <= horizon:
-            return False, []
-
-    return True, [f["id"] for f in unfinished]
+    pending = [
+        f["id"]
+        for f in unfinished
+        if (kickoff := _parse_datetime(f.get("kickoff_time"))) is None or kickoff >= cutoff
+    ]
+    if len(pending) == len(unfinished):
+        return True, pending
+    return False, []
 
 
 def resolve_target(
@@ -80,22 +79,38 @@ def resolve_target(
 ) -> Target | None:
     """The earliest gameweek that is ready and absent from the bucket, else None.
 
-    Ready means `data_checked`, since bonus points and autosubs go on being
-    revised for hours after the last whistle, or held up by postponed fixtures
-    alone, which returns a partial target. Yields at most one gameweek a call,
-    so a backlog clears one run at a time.
+    A gameweek becomes a candidate once its own deadline has passed. From there,
+    `data_checked` is trusted outright. Short of that, the gameweek is held for
+    `data_checked` until `now` closes to within `SETTLEMENT_LEAD_HOURS` of the
+    following gameweek's deadline, at which point its fixtures are checked
+    directly and it is ingested as partial if none can complete in time. The
+    final gameweek of a season has no following deadline, so it is held for
+    `data_checked` indefinitely.
+
+    Yields at most one gameweek a call, so a backlog clears one run at a time.
     """
     now = now or datetime.now(UTC)
+    ordered = sorted(events, key=lambda e: e["id"])
 
-    for event in sorted(events, key=lambda e: e["id"]):
+    for index, event in enumerate(ordered):
         gw = event["id"]
-        if not event.get("finished") or already_ingested(gw):
+        if already_ingested(gw):
+            continue
+
+        deadline = _parse_datetime(event.get("deadline_time"))
+        if deadline is None or now < deadline:
             continue
         if event.get("data_checked"):
             return Target(gw)
 
-        # Finished but unverified. The one case worth an extra fixtures call.
-        complete, pending = is_effectively_complete(fetch_fixtures(gw), now)
+        next_event = ordered[index + 1] if index + 1 < len(ordered) else None
+        if next_event is None:
+            continue
+        next_deadline = _parse_datetime(next_event.get("deadline_time"))
+        if next_deadline is None or now < next_deadline - timedelta(hours=SETTLEMENT_LEAD_HOURS):
+            continue
+
+        complete, pending = is_effectively_complete(fetch_fixtures(gw), next_deadline)
         if complete:
             return Target(gw, partial=True, pending_fixture_ids=pending)
 

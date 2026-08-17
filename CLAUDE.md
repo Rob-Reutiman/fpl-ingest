@@ -77,10 +77,14 @@ inlined next to a request.
   a missing entry or an unopened gameweek is not transient.
 - `finished: true` on an event means matches ended, but bonus points and autosubs
   are still revised for hours afterwards. `data_checked: true` is the settle
-  signal. **Never trigger on `finished` alone.**
-- One postponed fixture holds `data_checked` at false for its whole gameweek,
-  potentially for months. `gameweek.is_effectively_complete` handles that case and
-  the object is tagged `partial` in R2 metadata.
+  signal. `resolve_target` doesn't consult `finished` at all — a gameweek's own
+  `deadline_time` having passed is what makes it a candidate.
+- `data_checked` can stay false indefinitely: one postponed fixture, or just an
+  unusually slow settle. `resolve_target` holds off until `now` is within
+  `SETTLEMENT_LEAD_HOURS` of the *following* gameweek's deadline, then checks
+  fixtures directly via `is_effectively_complete` and ingests as partial if
+  none can complete before that deadline. A season's final gameweek has no
+  following deadline, so it waits on `data_checked` alone.
 - `entry/{id}/event/{gw}/picks/` 404s until GW `gw`'s deadline passes, and league
   314's standings only describe the GW `gw` cohort once its points settle. That is
   why the manager sample triggers on settlement, not on the upcoming deadline.
@@ -95,4 +99,5 @@ inlined next to a request.
   come from `element-summary/{id}` instead, and `source` records which endpoint
   each row came from.
 - All three jobs can extend the master tables, so their crons are spread (`:05`
-  hourly, `:35` for the dailies) rather than merely distinct.
+  hourly, `:35` every 4h for the other two, offset from each other) rather than
+  merely distinct.

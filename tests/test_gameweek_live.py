@@ -6,7 +6,7 @@ what lands in the raw layer."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fpl.jobs import gameweek_live
 
@@ -14,6 +14,11 @@ from .conftest import FakeAPI, FakeStore, make_bootstrap, make_event, make_fixtu
 
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 LIVE_KEY = "raw/2026-27/gw{}/gameweek-live.json"
+
+# A following gameweek's deadline this close means the settlement lead time has
+# started; this far away means it hasn't.
+NEAR_DEADLINE = (NOW + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+FAR_DEADLINE = (NOW + timedelta(days=6)).isoformat().replace("+00:00", "Z")
 
 
 def test_ingests_the_earliest_settled_gameweek(api: FakeAPI, store: FakeStore, client):
@@ -34,7 +39,9 @@ def test_ingests_the_earliest_settled_gameweek(api: FakeAPI, store: FakeStore, c
 
 
 def test_no_op_when_nothing_has_settled(api: FakeAPI, store: FakeStore, client):
-    api.bootstrap = make_bootstrap([make_event(1, finished=True), make_event(2)])
+    api.bootstrap = make_bootstrap(
+        [make_event(1, finished=True), make_event(2, deadline_time=FAR_DEADLINE)]
+    )
     api.fixtures = [make_fixture(i, event=1, finished=True) for i in range(1, 11)]
 
     assert gameweek_live.run(client, store, now=NOW) is None
@@ -62,7 +69,12 @@ def test_a_backlog_is_worked_off_one_gameweek_per_run(api: FakeAPI, store: FakeS
 def test_postponed_fixture_is_ingested_as_partial_at_the_unchanged_key(
     api: FakeAPI, store: FakeStore, client
 ):
-    api.bootstrap = make_bootstrap([make_event(3, finished=True, data_checked=False)])
+    api.bootstrap = make_bootstrap(
+        [
+            make_event(3, finished=True, data_checked=False),
+            make_event(4, deadline_time=NEAR_DEADLINE),
+        ]
+    )
     api.fixtures = [
         *(make_fixture(i, event=3, finished=True) for i in range(1, 10)),
         make_fixture(99, event=3, finished=False, kickoff_time="2026-11-01T15:00:00Z"),

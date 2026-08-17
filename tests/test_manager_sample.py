@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -13,6 +13,11 @@ from .conftest import FakeAPI, FakeStore, make_bootstrap, make_event, make_fixtu
 
 NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 SUMMARY_KEY = "raw/2026-27/gw{}/manager-picks-summary.json"
+
+# A following gameweek's deadline this close means the settlement lead time has
+# started; this far away means it hasn't.
+NEAR_DEADLINE = (NOW + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+FAR_DEADLINE = (NOW + timedelta(days=6)).isoformat().replace("+00:00", "Z")
 EXPECTED_KEYS = [
     "raw/2026-27/gw1/standings-top1000.json",
     "raw/2026-27/gw1/standings-sample.json",
@@ -133,7 +138,9 @@ def test_the_summary_is_written_last_so_a_killed_run_is_retried(
 
 
 def test_no_op_when_no_gameweek_has_settled(api: FakeAPI, store: FakeStore, client):
-    api.bootstrap = make_bootstrap([make_event(1, finished=True), make_event(2)])
+    api.bootstrap = make_bootstrap(
+        [make_event(1, finished=True), make_event(2, deadline_time=FAR_DEADLINE)]
+    )
     api.fixtures = [make_fixture(i, event=1, finished=True) for i in range(1, 11)]
 
     assert manager_sample.run(client, store, now=NOW) is None
@@ -211,7 +218,12 @@ def test_a_partial_gameweek_tags_every_gameweek_object(
     The cross-season master tables are deliberately excluded: they span every
     season, so "partial" would be meaningless on them.
     """
-    api.bootstrap = make_bootstrap([make_event(1, finished=True, data_checked=False)])
+    api.bootstrap = make_bootstrap(
+        [
+            make_event(1, finished=True, data_checked=False),
+            make_event(2, deadline_time=NEAR_DEADLINE),
+        ]
+    )
     api.fixtures = [
         make_fixture(1, event=1, finished=True),
         make_fixture(99, event=1, finished=False, kickoff_time=None),

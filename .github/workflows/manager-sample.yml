@@ -1,11 +1,16 @@
 name: manager-sample
 
 # Job 3 — harvest ~2,000 managers' picks for a settled gameweek. Cheap no-op
-# most days; ~10 minutes of throttled requests on the day a gameweek settles.
+# most runs; ~10 minutes of throttled requests on the run a gameweek settles.
+#
+# Every 4 hours, offset two hours from gameweek-live so the two never call the
+# API in the same window, for the same reason gameweek-live moved off a daily
+# schedule: the check itself is nearly free, so a tighter interval only lowers
+# the delay between settlement and harvest.
 
 on:
   schedule:
-    - cron: "35 6 * * *"
+    - cron: "35 3,7,11,15,19,23 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

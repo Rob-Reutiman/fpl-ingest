@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -32,16 +33,34 @@ _SUMMARY_RE = re.compile(r"/element-summary/(\d+)/$")
 # -- Response builders --------------------------------------------------------
 
 
-def make_event(gw: int, *, finished: bool = False, data_checked: bool = False) -> dict[str, Any]:
+# Default deadlines count forward from here, a fixed point safely before any
+# `now` a test might use and before the real clock this suite ever runs under.
+# A gameweek reads as already started unless a test overrides `deadline_time`.
+_DEADLINE_ANCHOR = datetime(2000, 1, 1, 17, 30, tzinfo=UTC)
+
+
+def make_event(
+    gw: int,
+    *,
+    finished: bool = False,
+    data_checked: bool = False,
+    deadline_time: str | None = None,
+) -> dict[str, Any]:
     """An `events[]` entry. The scoring fields are null until a gameweek starts,
     which is exactly how FPL sends them."""
+    if deadline_time is None:
+        deadline = _DEADLINE_ANCHOR + timedelta(weeks=gw)
+        deadline_time = deadline.isoformat().replace("+00:00", "Z")
+    else:
+        parsed = datetime.fromisoformat(deadline_time)
+        deadline = parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     return {
         "id": gw,
         "name": f"Gameweek {gw}",
         "finished": finished,
         "data_checked": data_checked,
-        "deadline_time": f"2026-08-{10 + gw:02d}T17:30:00Z",
-        "deadline_time_epoch": 1787333400 + gw * 604_800,
+        "deadline_time": deadline_time,
+        "deadline_time_epoch": int(deadline.timestamp()),
         "average_entry_score": 50 if finished else 0,
         "highest_score": 120 if finished else None,
         "most_selected": 1 if finished else None,

@@ -37,6 +37,11 @@ def _soon() -> str:
     return (datetime.now(UTC) + timedelta(hours=2)).isoformat()
 
 
+def _near_deadline() -> str:
+    """A following gameweek's deadline inside the settlement lead time."""
+    return (datetime.now(UTC) + timedelta(hours=20)).isoformat()
+
+
 def settled(gw: int = 1) -> list[dict]:
     return [make_event(gw, finished=True, data_checked=True)]
 
@@ -301,8 +306,14 @@ class TestOutputContract:
 
     def test_no_gameweek_ready_writes_nothing(self, api: FakeAPI, store, client):
         """Finished but unverified, with the last match imminent rather than
-        postponed: the normal bonus-points settling window, so hold off."""
-        api.bootstrap = make_bootstrap([make_event(1, finished=True, data_checked=False)])
+        postponed and the next deadline close enough to check: the normal
+        bonus-points settling window, so hold off."""
+        api.bootstrap = make_bootstrap(
+            [
+                make_event(1, finished=True, data_checked=False),
+                make_event(2, deadline_time=_near_deadline()),
+            ]
+        )
         api.fixtures = [
             make_fixture(101, event=1, finished=False, kickoff_time=_soon()),
         ]

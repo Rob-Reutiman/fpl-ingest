@@ -1,15 +1,19 @@
 name: gameweek-live
 
 # Job 2 — ingest and transform a settled gameweek's match facts. Exits in
-# seconds on the days nothing has settled.
+# seconds on the run nothing has settled.
 #
-# :35 puts it as far as possible from hourly-current's :05 slot. All three jobs
-# can extend the shared master tables, and Actions cron is only approximate, so
-# the schedules are spread rather than merely distinct.
+# Every 4 hours rather than daily: the settlement gate in `fpl.gameweek` only
+# does real work once there's a gameweek to check, so a tighter interval costs
+# nothing on the runs that find nothing, and it shortens both the normal-case
+# lag after `data_checked` flips and the window before a stuck gameweek's
+# fixtures get checked. :35 puts it away from hourly-current's :05 slot; all
+# three jobs can extend the shared master tables, and Actions cron is only
+# approximate, so the schedules are spread rather than merely distinct.
 
 on:
   schedule:
-    - cron: "35 5 * * *"
+    - cron: "35 1,5,9,13,17,21 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

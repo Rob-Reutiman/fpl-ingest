@@ -89,16 +89,19 @@ roughly eleven times the truth.
 | Workflow | Schedule (UTC) | What it does |
 |---|---|---|
 | `hourly-current` | :05 hourly | Snapshots `bootstrap-static` and `fixtures`; rebuilds `fpl_current` and the dimensions |
-| `gameweek-live` | 05:35 daily | Ingests a settled gameweek's match facts. No-op most days |
-| `manager-sample` | 06:35 daily | Harvests ~2,000 managers' picks and aggregates ownership. No-op most days |
+| `gameweek-live` | every 4h | Ingests a settled gameweek's match facts. No-op most runs |
+| `manager-sample` | every 4h | Harvests ~2,000 managers' picks and aggregates ownership. No-op most runs |
 | `backfill` | manual | Loads historical seasons from the community archive |
 
-A gameweek counts as settled once FPL reports `finished` **and** `data_checked` — bonus
-points and autosubs are revised for hours after the final whistle. The daily jobs check
-the bucket for the object they would write and exit cleanly if it's already there, so
-they're safe to run any day and work off a backlog one gameweek per run. The hourly job
-is the deliberate opposite: prices and injury news describe the present, so it always
-overwrites.
+A gameweek counts as settled once FPL reports `data_checked` — bonus points and autosubs
+are revised for hours after the final whistle, so `finished` alone isn't enough. The
+other two jobs check the bucket for the object they would write and exit cleanly if it's
+already there, so they're safe to run any time and work off a backlog one gameweek per
+run. If `data_checked` still hasn't landed by the time the *next* gameweek's deadline is
+under 24 hours away, and no outstanding fixture can complete before then, the gameweek is
+ingested anyway and tagged partial — the one case a genuinely stuck gameweek doesn't hold
+up the pipeline indefinitely. The hourly job is the deliberate opposite of all this:
+prices and injury news describe the present, so it always overwrites.
 
 The manager sample covers ranks 1–10,000 of the overall league: every entry in the top
 1,000 (group `top1000`), plus 40 pages drawn at random from the rest with 25 entries kept

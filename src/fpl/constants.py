@@ -23,6 +23,7 @@ SAMPLE_PAGE_END = 200
 SAMPLE_PAGE_COUNT = 40
 ENTRIES_PER_SAMPLED_PAGE = 25
 
-# A fixture whose kickoff lies further ahead than this, or which has none at
-# all, counts as postponed when deciding whether a gameweek is done.
-POSTPONED_FIXTURE_THRESHOLD_HOURS = 24
+# How close to the following gameweek's deadline an unconfirmed gameweek is
+# allowed to sit before it gets ingested as partial rather than held for
+# `data_checked`.
+SETTLEMENT_LEAD_HOURS = 24
