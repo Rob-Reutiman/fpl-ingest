@@ -1,4 +1,4 @@
-# fpl-edge
+# fpl-ingest
 
 A Fantasy Premier League data warehouse that builds itself. Scheduled GitHub Actions
 jobs pull from the [FPL public API](https://fantasy.premierleague.com/api/) into a
