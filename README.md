@@ -13,6 +13,16 @@ Cloudflare R2 bucket and transform it into Parquet.
 | `manager-sample` | every 4h | Harvests ~2,000 managers' picks and aggregates ownership. No-op most runs |
 | `backfill` | manual | Loads historical seasons from the community archive |
 
+A gameweek counts as settled once FPL reports `data_checked`; bonus points and autosubs
+are revised for hours after the final whistle. The two end-of-gameweek jobs check the 
+bucket for the object they would write and exit cleanly if it's already there. The hourly 
+job always overwrites since we only care about current state.
+
+The manager sample covers ranks 1–10,000 of the overall league: every entry in the top
+1,000 (group `top1000`), plus 40 pages drawn at random from the rest with 25 entries kept
+from each (group `sampled`). The draw is seeded on the season and gameweek, so a re-run
+repeats it.
+
 | Table | Grain | What's in it |
 |---|---|---|
 | `fact_player_fixture` | player × fixture | Minutes, goals, xG, xA, xGC, defensive contribution, BPS, bonus, points |
@@ -37,17 +47,7 @@ never reattributes an August match to the player's new club.
 exist in an older season are NULL throughout it. `defensive_contribution` before 2025-26
 is the case you'll hit; coalescing it to 0 will quietly poison any cross-season model.
 
-A gameweek counts as settled once FPL reports `data_checked`; bonus points and autosubs
-are revised for hours after the final whistle. The two end-of-gameweek jobs check the 
-bucket for the object they would write and exit cleanly if it's already there. The hourly 
-job always overwrites since we only care about current state.
-
-The manager sample covers ranks 1–10,000 of the overall league: every entry in the top
-1,000 (group `top1000`), plus 40 pages drawn at random from the rest with 25 entries kept
-from each (group `sampled`). The draw is seeded on the season and gameweek, so a re-run
-repeats it.
-
-## Historical backfill
+### Historical backfill
 
 Past seasons come from [vaastav/Fantasy-Premier-League](https://github.com/vaastav/Fantasy-Premier-League),
 the community archive of FPL data supplemented with xG/xA from Understat, transformed
@@ -68,8 +68,7 @@ A few things are deliberately left out of backfilled seasons:
 
 > The underlying data belongs to fantasy.premierleague.com and understat.com.
 
-## Running your own copy
-
+## Setup
 You need a Cloudflare R2 bucket and an API token.
 
 1. **R2 → Create bucket**, then **Manage R2 API Tokens → Create API token** with
@@ -80,18 +79,6 @@ You need a Cloudflare R2 bucket and an API token.
    Actions**: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
 4. Run `backfill.yml` once to load the history, then let the schedules take over.
 
-Every workflow has a manual trigger with an optional `dry_run` input, which fetches as
-normal but logs the writes instead of performing them:
-
-```bash
-gh workflow run hourly-current.yml -f dry_run=true && gh run watch
-```
-
-The season prefix is derived from the API on every run, never hardcoded, so rollover
-needs no code change — the jobs simply start writing under `curated/2027-28/`.
-
-> GitHub disables scheduled workflows on a repo with no activity for 60 days. If the
-> crons go quiet over the summer, push a commit or re-enable them.
 
 ## Local development
 
@@ -108,18 +95,11 @@ uv run ruff check --fix . && uv run ruff format .
 uv run pyright
 ```
 
-Jobs run locally against your own bucket. Start with `--dry-run`:
+Jobs run locally against your own bucket. Start with `--dry-run`, which fetches as
+normal but logs the writes instead of performing them:
 
 ```bash
 uv run python -m fpl.jobs.hourly_current --dry-run
 ```
-
-The backfill caches its downloads and can stage its Parquet locally, so you can inspect
-the output before it goes near a bucket:
-
-```bash
-uv run python -m fpl.jobs.backfill --dry-run --cache-dir data/archive --staging-dir data/out
-```
-
 
 Not affiliated with the Premier League or Fantasy Premier League.
