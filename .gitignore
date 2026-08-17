@@ -20,5 +20,8 @@ venv/
 data/*
 !data/.gitkeep
 
+# Local DuckDB exploration db (holds views + R2 connection state, not data)
+.duckdb/
+
 # OS
 .DS_Store

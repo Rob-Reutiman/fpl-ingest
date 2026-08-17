@@ -16,8 +16,8 @@ Data is ingested via the following jobs:
 | `backfill` | manual | Loads historical seasons from the community archive |
 
 A gameweek counts as settled once FPL reports `data_checked`; bonus points and autosubs
-are revised for hours after the final whistle. The two end-of-gameweek jobs check the 
-bucket for the object they would write and exit cleanly if it's already there. The hourly 
+are revised for hours after the final whistle. The two end-of-gameweek jobs check the
+bucket for the object they would write and exit cleanly if it's already there. The hourly
 job always overwrites since we only care about current state.
 
 The manager sample covers ranks 1–10,000 of the overall league: every entry in the top
@@ -83,6 +83,13 @@ You need a Cloudflare R2 bucket and an API token.
    Actions**: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
 4. Run `backfill.yml` once to load the history, then let the schedules take over.
 
+## Preview Data
+With the DuckDB CLI installed, preview the data:
+
+```bash
+python3 scripts/duckdb_explore.py     # create DuckDB from parquet data in R2
+duckdb -ui .duckdb/explore.duckdb
+```
 
 ## Local development
 
