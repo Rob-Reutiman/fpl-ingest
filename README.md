@@ -4,8 +4,8 @@ A Fantasy Premier League data warehouse that builds itself. Scheduled GitHub Act
 jobs pull from the [FPL public API](https://fantasy.premierleague.com/api/) into a
 Cloudflare R2 bucket and transform it into Parquet. 
 
-## The jobs
-
+## Jobs
+Data is ingested via the following jobs:
 | Workflow | Schedule (UTC) | What it does |
 |---|---|---|
 | `hourly-current` | :05 hourly | Snapshots `bootstrap-static` and `fixtures`; rebuilds `fpl_current` and the dimensions |
@@ -23,6 +23,8 @@ The manager sample covers ranks 1–10,000 of the overall league: every entry in
 from each (group `sampled`). The draw is seeded on the season and gameweek, so a re-run
 repeats it.
 
+## Tables
+Ingested data is transformed and written to the following tables:
 | Table | Grain | What's in it |
 |---|---|---|
 | `fact_player_fixture` | player × fixture | Minutes, goals, xG, xA, xGC, defensive contribution, BPS, bonus, points |
