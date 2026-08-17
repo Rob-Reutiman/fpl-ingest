@@ -104,4 +104,4 @@ normal but logs the writes instead of performing them:
 uv run python -m fpl.jobs.hourly_current --dry-run
 ```
 
-Not affiliated with the Premier League or Fantasy Premier League.
+> Not affiliated with the Premier League or Fantasy Premier League.
