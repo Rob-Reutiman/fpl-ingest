@@ -71,7 +71,9 @@ A few things are deliberately left out of backfilled seasons:
 - **`dim_gameweek` deadline and scoring columns** — NULL, because the archive has no
   events file and they can't be recovered after the fact.
 
-> The underlying data belongs to fantasy.premierleague.com and understat.com.
+> The underlying data belongs to fantasy.premierleague.com and understat.com. This
+> repository's [LICENSE](LICENSE) covers the code here only — it grants no rights to
+> that data.
 
 ## Setup
 You need a Cloudflare R2 bucket and an API token.
