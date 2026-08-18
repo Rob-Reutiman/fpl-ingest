@@ -5,7 +5,7 @@ jobs pull from the [FPL public API](https://fantasy.premierleague.com/api/) into
 Cloudflare R2 bucket and transform it into Parquet for later analysis.
 
 > Not affiliated with the Premier League or Fantasy Premier League. For official Premier League
-> information, head to [www.premierleague.com](www.premierleague.com).
+> information, head to [the official Premier League website](www.premierleague.com).
 
 ## Jobs
 Data is ingested via the following jobs:
